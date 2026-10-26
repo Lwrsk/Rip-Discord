@@ -1409,10 +1409,13 @@ fn save_download(file: &FileRef, from: &Path) -> Result<PathBuf> {
 /// glissé dedans), sans caractère interdit par Windows (`:` y créerait un
 /// flux caché), sans nom réservé (`CON`, `NUL`…), sans point ni espace final.
 fn safe_file_name(name: &str) -> String {
-    let name = Path::new(&plain_text(name))
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    // Dernier morceau après `/` ou `\`, à la main : sous Windows, `Path`
+    // prendrait « a: » de « a:b.txt » pour un lecteur et le jetterait.
+    let name = plain_text(name);
+    let name = match name.rsplit(['/', '\\']).next().unwrap_or_default() {
+        "." | ".." => "",
+        n => n,
+    };
     let mut name: String = name
         .chars()
         .map(|c| {
