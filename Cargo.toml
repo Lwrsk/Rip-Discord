@@ -1,0 +1,87 @@
+[package]
+name = "rip-discord"
+version = "0.1.0"
+edition = "2024"
+description = "Chat vocal/texte local et privé, hôte dynamique (un seul binaire client/hôte)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# Runtime asynchrone
+tokio = { version = "1.53", features = ["full"] }
+
+# Réseau : QUIC (UDP + TLS 1.3, multiplexage de flux, datagrammes pour l'audio)
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rcgen = "0.14" # certificat auto-signé généré au lancement de l'hôte
+ring = "0.17" # signatures Ed25519 (identités, serveurs, messages)
+dirs = "6"
+
+# Sérialisation des messages (binaire compact)
+serde = { version = "1.0", features = ["derive"] }
+postcard = { version = "1.1", features = ["use-std"] }
+
+# CLI, erreurs, logs
+clap = { version = "4.6", features = ["derive"] }
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["ansi", "fmt", "registry", "smallvec", "std", "tracing-log"] }
+# « clipboard » : sans lui, Copier/Coller ne passe pas par le presse-papiers du système.
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "persistence", "wayland", "x11"] }
+igd-next = { version = "0.18.0", features = ["aio_tokio"] }
+local-ip-address = "0.6.13"
+egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"] }
+mainline = "8.0.1"
+opus = "0.4.0"
+# Vidéo des partages d'écran (OpenH264, compilé depuis les sources)
+openh264 = "0.9.9"
+# Réduction des images avant encodage (SIMD), assez rapide pour 30 images/s
+fast_image_resize = { version = "6.1.0", default-features = false, features = ["std", "only_u8x4"] }
+cpal = "0.18.2"
+bytes = "1"
+# Images décodées passées à l'interface sans recopie
+bytemuck = { version = "1.25", features = ["extern_crate_alloc"] }
+xcap = "0.9.8"
+# Webcam (Media Foundation sous Windows, V4L2 sous Linux), images décodées par nous
+nokhwa = { version = "0.10.11", default-features = false, features = ["input-native"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+device_query = "4.0.1"
+# Choix des fichiers à joindre (fenêtre native du système)
+rfd = "0.17"
+# Nettoyage du micro, en pur Rust : annulation d'écho et gain automatique
+# (portage de WebRTC), suppression du bruit (RNNoise)
+sonora = "0.2.0"
+nnnoiseless = { version = "0.5.2", default-features = false }
+
+[profile.release]
+opt-level = 3
+# LTO complète : exe ~6 % plus petit que « thin » (mesuré), un peu plus long à compiler.
+lto = "fat"
+codegen-units = 1
+strip = true
+
+# Même en debug, le nettoyage du micro doit tenir le temps réel.
+[profile.dev.package]
+sonora = { opt-level = 3 }
+sonora-aec3 = { opt-level = 3 }
+sonora-agc2 = { opt-level = 3 }
+sonora-ns = { opt-level = 3 }
+sonora-common-audio = { opt-level = 3 }
+sonora-fft = { opt-level = 3 }
+sonora-simd = { opt-level = 3 }
+nnnoiseless = { opt-level = 3 }
+easyfft = { opt-level = 3 }
+rustfft = { opt-level = 3 }
+realfft = { opt-level = 3 }
+
+[target."cfg(windows)".dependencies]
+# Capture Windows.Graphics.Capture (fenêtres, jeux, vrai curseur)
+windows-capture = "2.0.1"
+# Notifications Windows (mentions, messages quand la fenêtre est cachée)
+tauri-winrt-notification = "0.8"
+winreg = "0.56"
+# Son des applications partagées (capture par processus, Windows 10 2004+)
+wasapi = "0.26.0"
+
+[target."cfg(windows)".build-dependencies]
+winresource = "0.1.34"

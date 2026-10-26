@@ -1,0 +1,87 @@
+name: Installeur Windows
+
+# - Sur une PR ou à la demande : construit l'installeur et le dépose en artefact.
+# - Sur un tag v* (ex. v0.1.0) : publie en plus une Release GitHub avec l'installeur.
+# - À la demande avec « tag » : ajoute l'installeur de la branche choisie à cette
+#   Release (le remplace s'il y est déjà).
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release à compléter (ex. v0.1.0), vide pour juste l'artefact"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Assembleur des optimisations d'OpenH264 (vidéo des partages d'écran).
+      # Sans lui, le codec se compile en C seul : plus lent, mais il marche.
+      - name: Installer NASM
+        uses: ilammy/setup-nasm@v1
+        continue-on-error: true
+
+      - name: Compiler
+        run: cargo build --release --locked
+
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Installer NSIS si absent
+        shell: pwsh
+        run: |
+          # Chocolatey répond parfois 503 : on réessaie, puis on passe par winget.
+          $dir = "C:\Program Files (x86)\NSIS"
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path "$dir\makensis.exe")) {
+            foreach ($i in 1..3) {
+              choco install nsis -y --no-progress
+              if (Test-Path "$dir\makensis.exe") { break }
+              Start-Sleep -Seconds (15 * $i)
+            }
+            if (-not (Test-Path "$dir\makensis.exe")) {
+              winget install --id NSIS.NSIS -e --silent --accept-source-agreements --accept-package-agreements
+            }
+            if (-not (Test-Path "$dir\makensis.exe")) { throw "NSIS introuvable après installation" }
+          }
+          $dir | Out-File -FilePath $env:GITHUB_PATH -Append
+          # Un essai raté laisse son code de sortie : NSIS est là, l'étape a réussi.
+          $global:LASTEXITCODE = 0
+
+      - name: Construire l'installeur
+        shell: pwsh
+        run: >
+          makensis /V2
+          /DVERSION=${{ steps.version.outputs.version }}
+          "/DEXE=$env:GITHUB_WORKSPACE\target\release\rip-discord.exe"
+          "/DOUTFILE=$env:GITHUB_WORKSPACE\RIP-Discord-Setup-${{ steps.version.outputs.version }}.exe"
+          installer\rip-discord.nsi
+
+      # Installeur de test (PR) : gardé une semaine seulement, pour ne pas
+      # remplir le quota de stockage des artefacts. Quota plein : on publie
+      # quand même la Release.
+      - uses: actions/upload-artifact@v6
+        continue-on-error: true
+        with:
+          name: RIP-Discord-Setup
+          path: RIP-Discord-Setup-*.exe
+          retention-days: 7
+
+      - name: Publier la Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: RIP-Discord-Setup-*.exe
+          generate_release_notes: true
