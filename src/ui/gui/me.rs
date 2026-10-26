@@ -13,6 +13,7 @@ use super::{
     icons::*,
     keys::{Combo, Hotkeys, Recording, Whisper},
     style::*,
+    update::Updater,
 };
 use crate::{
     audio, capture,
@@ -117,6 +118,7 @@ impl MeWindow {
         help: &mut bool,
         hotkeys: &Hotkeys,
         people: &[(UserId, String)],
+        updater: &mut Updater,
     ) -> Option<audio::Prefs> {
         let before = prefs.clone();
         if let Some(rx) = &self.listing {
@@ -164,7 +166,7 @@ impl MeWindow {
                 Tab::Audio => self.audio(ui, prefs, live.as_deref()),
                 Tab::Video => self.video(ui, prefs),
                 Tab::Keys => self.keys(ui, hotkeys, people, prefs),
-                Tab::Data => data(ui, store, &mut self.key),
+                Tab::Data => data(ui, store, &mut self.key, updater),
             },
             None,
         );
@@ -696,7 +698,7 @@ fn device_combo(ui: &mut egui::Ui, id: &str, current: &mut Option<String>, list:
         });
 }
 
-fn data(ui: &mut egui::Ui, store: &Store, key: &mut KeyBackup) {
+fn data(ui: &mut egui::Ui, store: &Store, key: &mut KeyBackup, updater: &mut Updater) {
     group(ui, "Application", |ui| {
         row_with(
             ui,
@@ -708,6 +710,7 @@ fn data(ui: &mut egui::Ui, store: &Store, key: &mut KeyBackup) {
             },
         );
     });
+    updater.settings(ui);
     group(ui, "Dossier de l'app", |ui| {
         ui.add(
             egui::Label::new(

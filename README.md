@@ -15,6 +15,12 @@ Download `RIP-Discord-Setup-x.y.z.exe` from the
 installer creates shortcuts (Start menu and desktop), allows the app through
 the Windows firewall and adds an uninstall entry.
 
+Updates: the app checks this repository's latest Release at launch (and every
+6 hours) and offers it in a small box. « Mettre à jour » downloads the
+installer, checks its size and the SHA-256 digest published by GitHub, then
+installs it silently and reopens the app (Windows asks for admin rights). It can
+be turned off in « Mes réglages > Données ».
+
 The installer is not code-signed yet, so Windows SmartScreen warns on first
 launch.
 
