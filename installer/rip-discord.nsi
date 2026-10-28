@@ -4,6 +4,7 @@
 
 Unicode true
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -50,6 +51,21 @@ VIAddVersionKey /LANG=${LANG_FRENCH} "LegalCopyright" "MIT OR Apache-2.0"
 Section "Installer"
   SetShellVarContext all
   SetOutPath "$INSTDIR"
+  ; Mise à jour lancée par l'app : elle se ferme juste après, on attend que
+  ; son exe soit libéré pour le remplacer (20 s au plus).
+  StrCpy $0 0
+  attente:
+    IfFileExists "$INSTDIR\rip-discord.exe" 0 libre
+    ClearErrors
+    FileOpen $1 "$INSTDIR\rip-discord.exe" a
+    IfErrors 0 ouvert
+    IntOp $0 $0 + 1
+    IntCmp $0 100 libre
+    Sleep 200
+    Goto attente
+  ouvert:
+    FileClose $1
+  libre:
   File "/oname=rip-discord.exe" "${EXE}"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -70,6 +86,18 @@ Section "Installer"
   WriteRegDWORD HKLM "${UNINST_KEY}" "NoModify" 1
   WriteRegDWORD HKLM "${UNINST_KEY}" "NoRepair" 1
 SectionEnd
+
+; « /relance » (mise à jour depuis l'app, avec /S) : rouvre l'app une fois
+; installée. Passer par l'explorateur la lance sans les droits administrateur
+; de l'installeur.
+Function .onInstSuccess
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "/relance" $R1
+  IfErrors fin
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\rip-discord.exe"'
+  fin:
+FunctionEnd
 
 Section "Uninstall"
   SetShellVarContext all

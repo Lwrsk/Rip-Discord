@@ -13,6 +13,12 @@ Télécharger `RIP-Discord-Setup-x.y.z.exe` dans les
 crée les raccourcis (menu Démarrer + bureau), autorise l'app dans le pare-feu
 Windows et ajoute une entrée de désinstallation.
 
+Mises à jour : l'app regarde la dernière Release de ce dépôt au lancement (puis
+toutes les 6 h) et la propose dans un petit encart. « Mettre à jour » télécharge
+l'installeur, vérifie sa taille et l'empreinte SHA-256 publiée par GitHub, puis
+l'installe sans fenêtres et rouvre l'app (Windows demande l'accord
+administrateur). Désactivable dans « Mes réglages > Données ».
+
 ## Utiliser
 
 Au premier lancement, l'app demande juste un pseudo.
@@ -361,7 +367,5 @@ Sans webcam, `RIP_DISCORD_FAKE_CAMERA=1` la remplace par une mire animée.
 1. **Relais** pour les NAT symétriques via un participant joignable (aujourd'hui
    c'est l'hôte du serveur qui relaie la voix de ceux qui ne se joignent pas
    directement).
-2. **Mise à jour automatique** : demande un dépôt public (ou un jeton dans
-   l'appli) pour télécharger les nouvelles versions.
-3. **Installeur signé** : demande un certificat de signature de code, sinon
+2. **Installeur signé** : demande un certificat de signature de code, sinon
    Windows SmartScreen continue d'avertir au premier lancement.

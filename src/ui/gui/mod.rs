@@ -15,6 +15,7 @@ mod server;
 mod share;
 mod single;
 mod style;
+mod update;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -269,6 +270,7 @@ pub fn run(code: Option<String>, name: Option<String>) -> Result<()> {
                 .and_then(|s| eframe::get_value::<keys::Bindings>(s, "raccourcis"))
                 .unwrap_or_default();
             let dialog = code.map(|code| Dialog::Join { code, show: false });
+            let updates = cc.storage.and_then(|s| s.get_string("maj_auto")).as_deref() != Some("0");
             Ok(Box::new(App {
                 welcome: name.trim().is_empty().then(String::new),
                 prefs,
@@ -288,6 +290,7 @@ pub fn run(code: Option<String>, name: Option<String>) -> Result<()> {
                 me: None,
                 hotkeys: keys::Hotkeys::start(bindings),
                 relaunched,
+                updater: update::Updater::new(updates),
             }))
         }),
     )
@@ -323,6 +326,7 @@ struct App {
     hotkeys: keys::Hotkeys,
     /// Codes d'invitation passés par un nouveau lancement de l'app.
     relaunched: std_mpsc::Receiver<String>,
+    updater: update::Updater,
 }
 
 /// Petites fenêtres de l'accueil.
@@ -335,7 +339,8 @@ impl eframe::App for App {
     /// Appelé même fenêtre réduite (contrairement à `ui`) : ce que le réseau
     /// envoie est traité au fil de l'eau au lieu de s'entasser en mémoire, et
     /// les notifications partent.
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.updater.tick(ctx);
         // Lancée de nouveau avec un code : on propose de rejoindre (depuis
         // l'accueil seulement, pour ne pas quitter un serveur sans le vouloir).
         while let Ok(code) = self.relaunched.try_recv() {
@@ -405,6 +410,7 @@ impl eframe::App for App {
                 &mut self.help,
                 &self.hotkeys,
                 &people,
+                &mut self.updater,
             );
             if let Some(prefs) = changed
                 && let Some(s) = &self.session
@@ -416,6 +422,7 @@ impl eframe::App for App {
             }
         }
         help_window(&ctx, &mut self.help);
+        self.updater.toast(&ctx);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -428,6 +435,7 @@ impl eframe::App for App {
         storage.set_string("share_quality", o.quality.key().into());
         storage.set_string("share_sound", if o.sound { "1" } else { "0" }.into());
         eframe::set_value(storage, "raccourcis", &self.hotkeys.bindings());
+        storage.set_string("maj_auto", if self.updater.auto { "1" } else { "0" }.into());
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

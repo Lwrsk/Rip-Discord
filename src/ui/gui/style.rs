@@ -318,6 +318,11 @@ pub fn open_folder(path: &std::path::Path) {
     }
 }
 
+/// Ouvre une page web dans le navigateur.
+pub fn open_link(url: &str) {
+    open_folder(std::path::Path::new(url));
+}
+
 /// Barre de niveau du micro, avec le seuil de sensibilité.
 pub fn level_meter(ui: &mut egui::Ui, db: f32, threshold: f32) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), egui::Sense::hover());
