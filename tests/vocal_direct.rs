@@ -258,3 +258,82 @@ async fn la_voix_tient_pendant_la_releve_de_l_hote() {
     }
     assert!(!room[0].mesh.linked(3));
 }
+
+/// Un membre du serveur qui n'est pas dans le salon vocal se relie quand même
+/// à ses participants (app modifiée) : il n'entend rien, ne voit pas l'écran
+/// partagé, on ne l'écoute pas, et sa connexion est refermée.
+#[tokio::test]
+async fn un_membre_hors_du_salon_n_ecoute_ni_ne_regarde() {
+    let card = ServerCard::create(&Identity::generate(), "vocal");
+    let mut all: Vec<Participant> = (1..=3).map(participant).collect();
+    // Celui dont l'identité est la plus petite appelle les autres : c'est lui l'intrus.
+    all.sort_by_key(|p| p.contact.user);
+    let mut intruder = all.remove(0);
+    let mut room = all;
+    let contacts: Vec<Contact> = room.iter().chain([&intruder]).map(|p| p.contact.clone()).collect();
+    let inside: Vec<PeerId> = room.iter().map(|p| p.peer).collect();
+    for p in &room {
+        p.mesh.set_session(card.id, p.peer);
+        p.mesh.set_contacts(&contacts);
+        p.mesh.set_room(&inside);
+    }
+    // L'intrus prétend être dans le salon et appelle tout le monde.
+    let everyone: Vec<PeerId> = contacts.iter().map(|c| c.peer).collect();
+    intruder.mesh.set_session(card.id, intruder.peer);
+    intruder.mesh.set_contacts(&contacts);
+    intruder.mesh.set_room(&everyone);
+    timeout(Duration::from_secs(10), async {
+        while !(intruder.mesh.all_linked() && room.iter().all(|p| p.mesh.all_linked())) {
+            sleep(Duration::from_millis(50)).await;
+            intruder.mesh.tick();
+        }
+    })
+    .await
+    .expect("pas reliés");
+    let (a, b) = (room[0].peer, room[1].peer);
+
+    // Il parle : personne ne l'entend.
+    intruder.mesh.send_voice(1, b"coucou", None);
+    // Ils parlent : il n'entend rien, mais eux s'entendent.
+    assert!(room[0].mesh.send_voice(2, b"entre nous", None).is_empty());
+    let v = timeout(Duration::from_secs(5), room[1].incoming.voice.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((v.from, v.opus.as_slice()), (a, &b"entre nous"[..]));
+    assert!(
+        timeout(Duration::from_millis(300), room[0].incoming.voice.recv())
+            .await
+            .is_err()
+    );
+    assert!(
+        timeout(Duration::from_millis(300), intruder.incoming.voice.recv())
+            .await
+            .is_err()
+    );
+
+    // Il demande à voir l'écran partagé : ni image, ni son, ni image clé produite pour lui.
+    assert!(intruder.mesh.watch(a, true));
+    sleep(Duration::from_millis(300)).await;
+    assert!(room[0].incoming.keys.try_recv().is_err());
+    let frame = screen::Frame {
+        seq: 1,
+        key: true,
+        camera: false,
+        data: Bytes::from_static(b"mon ecran"),
+    };
+    assert!(!room[0].mesh.send_screen(&frame));
+    room[0].mesh.send_sound(1, b"son");
+    assert!(
+        timeout(Duration::from_millis(300), intruder.incoming.screens.recv())
+            .await
+            .is_err()
+    );
+    assert!(intruder.incoming.sounds.try_recv().is_err());
+
+    // Passé le délai de grâce, sa connexion est refermée ; les autres restent reliés.
+    sleep(Duration::from_secs(5)).await;
+    room.iter().for_each(|p| p.mesh.tick());
+    assert!(!room[0].mesh.linked(intruder.peer) && !room[1].mesh.linked(intruder.peer));
+    assert!(room[0].mesh.linked(b) && room[1].mesh.linked(a));
+}

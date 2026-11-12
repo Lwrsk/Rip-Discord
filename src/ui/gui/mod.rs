@@ -8,6 +8,7 @@
 mod chat;
 mod icons;
 mod keys;
+mod markup;
 mod me;
 mod net;
 mod notify;
@@ -18,7 +19,7 @@ mod style;
 mod update;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, mpsc as std_mpsc},
@@ -72,6 +73,8 @@ enum Cmd {
     Fetch(FileRef),
     /// Copier une pièce jointe dans le dossier Téléchargements.
     Save(FileRef),
+    /// Décoder une image reçue en détail, pour la voir en grand.
+    View(FileRef),
     VoiceJoin(ChannelId),
     VoiceLeave,
     UpdateCard(Box<ServerCard>),
@@ -148,6 +151,11 @@ enum Update {
     File {
         hash: FileHash,
         state: FileState,
+    },
+    /// Image décodée en détail, pour la voir en grand (`None` : illisible).
+    Picture {
+        hash: FileHash,
+        image: Option<egui::ColorImage>,
     },
     /// L'hôte est parti : relève en cours (`None` : c'est fini).
     Reconnecting(Option<String>),
@@ -441,7 +449,8 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // Laisse la session (et celles qu'on vient de quitter) prévenir les
         // autres et fermer le port sur la box.
-        if let Some(s) = self.session.take() {
+        if let Some(mut s) = self.session.take() {
+            s.save_read_marks();
             let _ = s.cmd.send(Cmd::Leave);
             self.leaving.push(s.task);
         }
@@ -514,7 +523,8 @@ impl App {
     /// Revient à l'accueil. La tâche réseau de la session continue seule
     /// jusqu'à avoir prévenu les autres.
     fn close_session(&mut self, error: Option<String>) {
-        if let Some(s) = self.session.take() {
+        if let Some(mut s) = self.session.take() {
+            s.save_read_marks();
             self.share_preview = s.preview;
             self.share_options = s.share_options;
             if !s.task.is_finished() {
@@ -1069,8 +1079,19 @@ struct Session {
     notice: Option<(String, f64)>,
     invite: Option<Invite>,
     rtt: Option<Duration>,
-    /// Messages déjà vus par salon (pour signaler les nouveaux).
-    read: HashMap<ChannelId, usize>,
+    /// Jusqu'où chaque salon a été lu : l'heure du dernier message vu
+    /// (retenue d'une session à l'autre, pour signaler ce qu'on a manqué).
+    read_at: BTreeMap<ChannelId, u64>,
+    /// Les repères de lecture ont changé depuis cet instant, pas encore enregistrés.
+    read_dirty: Option<std::time::Instant>,
+    /// Salons où un message vient d'arriver sans que je le voie.
+    fresh: HashSet<ChannelId>,
+    /// Ligne « Nouveaux messages » du salon affiché : après les messages
+    /// déjà lus quand j'y suis entré (ou revenu sur la fenêtre).
+    new_line: Option<u64>,
+    /// Salon et fenêtre active à l'image précédente (pour voir quand j'y reviens).
+    was_viewing: Option<(ChannelId, bool)>,
+    store: Store,
     /// Mentions pas encore vues, par salon.
     pings: HashMap<ChannelId, usize>,
     /// Messages arrivés pendant que la fenêtre était en arrière-plan (titre).
@@ -1118,6 +1139,8 @@ impl Session {
         let my_name = name.clone();
         let out = Out { tx, ctx: ctx.clone() };
         let me = identity.clone();
+        let paste_dir = store.root().join("images-collees");
+        let kept = store.clone();
         let task = rt.spawn(async move {
             // La session d'avant prévient les autres et se retire de
             // l'annuaire : on lui laisse un court instant (on peut vouloir
@@ -1166,11 +1189,16 @@ impl Session {
             view: None,
             identity,
             channel: 0,
-            chat: chat::Chat::default(),
+            chat: chat::Chat::default().with_paste_dir(paste_dir),
             notice: None,
             invite: None,
             rtt: None,
-            read: HashMap::new(),
+            read_at: BTreeMap::new(),
+            read_dirty: None,
+            fresh: HashSet::new(),
+            new_line: None,
+            was_viewing: None,
+            store: kept,
             pings: HashMap::new(),
             unseen: 0,
             message_cue: None,
@@ -1205,20 +1233,32 @@ impl Session {
                     }
                     if self.view.is_some() {
                         self.reconnected_at = now_secs();
+                    } else {
+                        // Première connexion de la session : où j'en étais
+                        // resté. Jamais venu sur ce PC : tout ce qui existe
+                        // déjà compte pour lu.
+                        self.read_at = self.store.read_marks(view.card.id).unwrap_or_else(|| {
+                            let now = now_ms();
+                            self.read_dirty = Some(std::time::Instant::now());
+                            s.text_channels.iter().map(|c| (c.id, now)).collect()
+                        });
+                        self.was_viewing = None;
                     }
                     self.view = Some(*view);
                     self.vote = None;
                     self.asked_host = false;
-                    self.mark_all_read();
                 }
                 Update::Invite(i) => self.invite = Some(i),
                 Update::Own(msg) => {
+                    // J'écris : je suis à jour, la ligne « Nouveaux messages » s'en va.
+                    if msg.body.channel == self.channel && msg.body.kind.target().is_none() {
+                        self.new_line = None;
+                    }
                     if let Some(v) = &mut self.view {
                         v.push_own(msg);
                     }
                 }
                 Update::Net(ev) => {
-                    let history = matches!(ev, Event::History(_));
                     match &ev {
                         Event::Vote { id, candidate, secs } => {
                             let mine = self.view.as_ref().is_some_and(|v| v.my_peer == *candidate);
@@ -1271,10 +1311,6 @@ impl Session {
                             self.channel = s.text_channels.first().map_or(0, |c| c.id);
                         }
                     }
-                    // L'historique, c'est du déjà-vu : pas de pastille « nouveau ».
-                    if history {
-                        self.mark_all_read();
-                    }
                     if let Event::Text { msg, .. } = &ev {
                         self.alert(msg);
                     }
@@ -1296,6 +1332,7 @@ impl Session {
                         let _ = self.cmd.send(c);
                     }
                 }
+                Update::Picture { hash, image } => self.chat.picture_ready(&self.ctx, hash, image),
                 Update::Reconnecting(r) => {
                     if self.reconnecting.is_none() && r.is_some() {
                         self.connecting_since = now_secs();
@@ -1382,6 +1419,9 @@ impl Session {
         }
         let focused = self.ctx.input(|i| i.viewport().focused).unwrap_or(true);
         let seen = focused && msg.body.channel == self.channel;
+        if !seen {
+            self.fresh.insert(msg.body.channel);
+        }
         let attention = if v.mentions_me(msg) && !seen {
             *self.pings.entry(msg.body.channel).or_default() += 1;
             let channel = v
@@ -1418,16 +1458,48 @@ impl Session {
         }
     }
 
-    fn mark_all_read(&mut self) {
+    /// Des messages des autres que je n'ai pas vus dans ce salon : arrivés à
+    /// l'instant, ou écrits pendant que je n'étais pas là.
+    fn unread(&self, channel: ChannelId) -> bool {
+        let Some(v) = &self.view else { return false };
+        self.fresh.contains(&channel)
+            || v.latest_from_others(channel) > self.read_at.get(&channel).copied().unwrap_or(0)
+    }
+
+    /// Le salon affiché est lu (fenêtre active seulement). En y entrant, ou
+    /// en revenant sur la fenêtre, on retient où placer « Nouveaux messages ».
+    fn mark_read(&mut self, focused: bool) {
         let Some(v) = &self.view else { return };
-        for c in &v.card.settings().text_channels {
-            self.read.insert(c.id, v.messages(c.id).count());
+        let channel = self.channel;
+        let now = Some((channel, focused));
+        if self.was_viewing != now {
+            if focused {
+                self.new_line = self.read_at.get(&channel).copied();
+            }
+            self.was_viewing = now;
+        }
+        if !focused || channel == 0 {
+            return;
+        }
+        self.fresh.remove(&channel);
+        let latest = v.latest(channel);
+        if self.read_at.get(&channel).copied().unwrap_or(0) < latest || !self.read_at.contains_key(&channel) {
+            self.read_at.insert(channel, latest);
+            self.read_dirty.get_or_insert_with(std::time::Instant::now);
+        }
+        // Enregistré de temps en temps, pas à chaque message.
+        if self.read_dirty.is_some_and(|t| t.elapsed() > Duration::from_secs(3)) {
+            self.save_read_marks();
         }
     }
 
-    fn unread(&self, channel: ChannelId) -> bool {
-        let Some(v) = &self.view else { return false };
-        v.messages(channel).count() > self.read.get(&channel).copied().unwrap_or(0)
+    fn save_read_marks(&mut self) {
+        let Some(v) = &self.view else { return };
+        if self.read_dirty.take().is_some()
+            && let Err(e) = self.store.save_read_marks(v.card.id, &self.read_at)
+        {
+            tracing::warn!("repères de lecture : {e:#}");
+        }
     }
 
     fn channel_name(&self) -> String {
@@ -1445,10 +1517,9 @@ impl Session {
 
     fn ui(&mut self, ui: &mut egui::Ui, threshold: f32) {
         // Le salon affiché est lu.
-        if let Some(v) = &self.view {
-            self.read.insert(self.channel, v.messages(self.channel).count());
-        }
-        if ui.input(|i| i.viewport().focused).unwrap_or(true) {
+        let focused = ui.input(|i| i.viewport().focused).unwrap_or(true);
+        self.mark_read(focused);
+        if focused {
             self.pings.remove(&self.channel);
             if self.unseen > 0 {
                 self.unseen = 0;
@@ -2700,6 +2771,7 @@ impl Session {
         let channel = self.channel;
         let channel_name = self.channel_name();
         let chat = &mut self.chat;
+        let new_line = self.new_line;
         let mut cmds = Vec::new();
         egui::ScrollArea::vertical()
             .id_salt(("messages", channel))
@@ -2723,7 +2795,7 @@ impl Session {
                         );
                     }
                 }
-                cmds = chat.messages(ui, view, channel);
+                cmds = chat.messages(ui, view, channel, new_line);
             });
         for c in cmds {
             let _ = self.cmd.send(c);

@@ -7,13 +7,14 @@
 //! └── servers/<id>/
 //!     ├── card.bin              copie signée du serveur (nom, salons, admins)
 //!     ├── history.bin           messages gardés, si le serveur garde l'historique
+//!     ├── lus.bin               jusqu'où chaque salon a été lu (pastilles « nouveau »)
 //!     └── files/<sha256>        pièces jointes reçues ou envoyées
 //! ```
 //!
 //! Le dossier se change avec la variable d'environnement `RIP_DISCORD_DATA`.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -158,6 +159,19 @@ impl Store {
         Ok(path)
     }
 
+    /// Jusqu'où j'ai lu chaque salon sur cette machine : l'heure du dernier
+    /// message vu. `None` si le serveur n'a encore jamais été ouvert ici.
+    pub fn read_marks(&self, server: ServerId) -> Option<BTreeMap<ChannelId, u64>> {
+        let bytes = fs::read(self.server_dir(server).join("lus.bin")).ok()?;
+        postcard::from_bytes(&bytes).ok()
+    }
+
+    pub fn save_read_marks(&self, server: ServerId, marks: &BTreeMap<ChannelId, u64>) -> Result<()> {
+        let dir = self.server_dir(server);
+        fs::create_dir_all(&dir)?;
+        write_atomic(&dir.join("lus.bin"), &postcard::to_stdvec(marks)?)
+    }
+
     /// Efface tout ce que cette machine sait du serveur.
     pub fn forget(&self, id: ServerId) -> Result<()> {
         let dir = self.server_dir(id);
@@ -187,6 +201,9 @@ pub struct HistoryLog {
     policy: HistoryPolicy,
     messages: Vec<SignedMessage>,
     seen: HashSet<Vec<u8>>,
+    /// Identifiants des vrais messages gardés (pas des actions) : savoir si
+    /// le message visé par une réaction est là, sans relire tout le fil.
+    content: HashSet<MessageId>,
     /// Créateur et admins : ils peuvent supprimer les messages des autres.
     moderators: Vec<UserId>,
     /// Messages supprimés → qui les a supprimés (la suppression peut arriver
@@ -211,6 +228,7 @@ impl HistoryLog {
             policy,
             messages: Vec::new(),
             seen: HashSet::new(),
+            content: HashSet::new(),
             moderators: Vec::new(),
             deleted: HashMap::new(),
             pushed: 0,
@@ -231,6 +249,7 @@ impl HistoryLog {
             }
         }
         log.messages.sort_by_cached_key(|m| m.order());
+        log.index();
         log.set_policy(policy);
         log
     }
@@ -244,6 +263,7 @@ impl HistoryLog {
             policy: self.policy,
             messages: self.messages.clone(),
             seen: self.seen.clone(),
+            content: self.content.clone(),
             moderators: self.moderators.clone(),
             deleted: self.deleted.clone(),
             pushed: 0,
@@ -320,16 +340,18 @@ impl HistoryLog {
         if let Kind::Delete { target } = msg.body.kind {
             self.note_delete(&msg);
             let before = self.messages.len();
-            let allowed = self
-                .messages
-                .iter()
-                .find(|m| m.id() == target)
-                .is_some_and(|m| self.may_delete(&msg.signer, m));
+            let allowed = self.content.contains(&target)
+                && self
+                    .messages
+                    .iter()
+                    .find(|m| is_content(m) && m.id() == target)
+                    .is_some_and(|m| self.may_delete(&msg.signer, m));
             if allowed {
-                self.messages.retain(|m| {
-                    m.id() != target
-                        && (m.body.kind.target() != Some(target) || matches!(m.body.kind, Kind::Delete { .. }))
+                self.messages.retain(|m| match m.body.kind.target() {
+                    None => m.id() != target,
+                    Some(t) => t != target || matches!(m.body.kind, Kind::Delete { .. }),
                 });
+                self.content.remove(&target);
             }
             if self.messages.len() != before {
                 self.insert(msg);
@@ -358,8 +380,22 @@ impl HistoryLog {
     /// Range un message à sa place dans le fil (le plus souvent à la fin).
     fn insert(&mut self, msg: SignedMessage) {
         let key = msg.order();
-        let at = self.messages.partition_point(|m| m.order() <= key);
+        if is_content(&msg) {
+            self.content.insert(key.1);
+        }
+        // Le plus souvent à la fin : pas besoin de chercher sa place.
+        let at = match self.messages.last() {
+            Some(last) if last.body.at_ms > key.0 || (last.body.at_ms == key.0 && last.order() > key) => {
+                self.messages.partition_point(|m| m.order() <= key)
+            }
+            _ => self.messages.len(),
+        };
         self.messages.insert(at, msg);
+    }
+
+    /// Recalcule les identifiants des messages gardés (après un tri ou une coupe).
+    fn index(&mut self) {
+        self.content = self.messages.iter().filter(|m| is_content(m)).map(|m| m.id()).collect();
     }
 
     /// Le salon de `msg` a-t-il déjà, sans lui, sa limite de messages plus récents ?
@@ -370,7 +406,7 @@ impl HistoryLog {
         }
         // Une action sur un message gardé est gardée avec lui.
         if let Some(target) = msg.body.kind.target()
-            && self.messages.iter().any(|m| m.id() == target)
+            && self.content.contains(&target)
         {
             return false;
         }
@@ -389,6 +425,7 @@ impl HistoryLog {
         self.policy = policy;
         if !policy.keep {
             self.messages.clear();
+            self.content.clear();
             if let Some(path) = &self.path {
                 let _ = fs::remove_file(path);
                 if let Some(dir) = path.parent() {
@@ -406,7 +443,7 @@ impl HistoryLog {
             let mut per_channel: HashMap<ChannelId, usize> = HashMap::new();
             let mut cutoff: HashMap<ChannelId, (u64, MessageId)> = HashMap::new();
             let mut kept = HashSet::new();
-            let present: HashSet<MessageId> = self.messages.iter().filter(|m| is_content(m)).map(|m| m.id()).collect();
+            let present = &self.content;
             for m in self.messages.iter().rev().filter(|m| is_content(m)) {
                 let n = per_channel.entry(m.body.channel).or_default();
                 *n += 1;
@@ -428,6 +465,7 @@ impl HistoryLog {
             });
         }
         if self.messages.len() != before {
+            self.index();
             self.rewrite();
         }
     }
@@ -437,6 +475,7 @@ impl HistoryLog {
         let before = self.messages.len();
         self.messages.retain(|m| exists(m.body.channel));
         if self.messages.len() != before {
+            self.index();
             self.rewrite();
         }
     }
@@ -804,6 +843,21 @@ mod tests {
         log.set_policy(policy);
         assert!(log.messages().iter().all(|m| m.id() != target && is_content(m)));
         assert_eq!(log.messages().len(), 10);
+    }
+
+    #[test]
+    fn reperes_de_lecture_gardes() {
+        let store = temp_store();
+        let me = Identity::generate();
+        let card = ServerCard::create(&me, "lus");
+        assert!(store.read_marks(card.id).is_none(), "jamais ouvert ici");
+        let marks = BTreeMap::from([(1, 1_700_000_000_000), (7, 42)]);
+        store.save_read_marks(card.id, &marks).unwrap();
+        assert_eq!(store.read_marks(card.id), Some(marks));
+        // Oublier le serveur les efface avec le reste.
+        store.forget(card.id).unwrap();
+        assert!(store.read_marks(card.id).is_none());
+        let _ = fs::remove_dir_all(store.root());
     }
 
     #[test]

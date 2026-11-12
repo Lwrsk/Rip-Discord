@@ -1332,9 +1332,20 @@ fn image_size(bytes: &[u8]) -> Option<(u32, u32)> {
 
 /// Aperçu d'une image reçue, réduit pour le salon.
 fn preview(bytes: &[u8]) -> Option<egui::ColorImage> {
+    scaled(bytes, 720, 480)
+}
+
+/// La même image pour la voir en grand : assez de détail pour un écran
+/// entier, sans garder en mémoire une photo de 50 mégapixels.
+fn detailed(bytes: &[u8]) -> Option<egui::ColorImage> {
+    scaled(bytes, 2560, 1600)
+}
+
+/// Image décodée, réduite si elle dépasse `max_w` × `max_h`.
+fn scaled(bytes: &[u8], max_w: u32, max_h: u32) -> Option<egui::ColorImage> {
     let img = image_reader(bytes)?.decode().ok()?;
-    let img = if img.width() > 720 || img.height() > 480 {
-        img.thumbnail(720, 480)
+    let img = if img.width() > max_w || img.height() > max_h {
+        img.thumbnail(max_w, max_h)
     } else {
         img
     };
@@ -1535,6 +1546,18 @@ fn command(c: Cmd, ctx: &Ctx, voice: &mut Voice, client: &Client, out: &Out) -> 
                 Err(e) => format!("Enregistrement impossible : {e:#}"),
             };
             out.send(Update::Notice(line));
+        }
+        Cmd::View(file) => {
+            // Décodage hors des fils réseau ; l'aperçu reste affiché en attendant.
+            let path = ctx.store.file_path(client.card.id, &file.hash);
+            let (tx, ectx) = (out.tx.clone(), out.ctx.clone());
+            tokio::task::spawn_blocking(move || {
+                let image = std::fs::read(path)
+                    .ok()
+                    .filter(|b| files::hash(b) == file.hash)
+                    .and_then(|b| detailed(&b));
+                Out { tx, ctx: ectx }.send(Update::Picture { hash: file.hash, image });
+            });
         }
         Cmd::VoiceJoin(channel) => {
             // Changer de salon éteint la webcam (l'hôte l'oublie aussi).

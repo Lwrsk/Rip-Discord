@@ -33,20 +33,26 @@ Au premier lancement, l'app demande juste un pseudo.
    (lui aussi caché pendant la saisie). C'est tout.
 4. **Salons** : des salons **texte** et des salons **vocaux**, séparés, dans la
    colonne de gauche. Un point signale les nouveaux messages d'un salon, `@2`
-   le nombre de fois où l'on t'a mentionné. Les messages sont groupés par
-   auteur, avec l'heure et le jour.
+   le nombre de fois où l'on t'a mentionné ; c'est retenu d'un lancement à
+   l'autre, et une ligne « Nouveaux messages » montre où tu t'étais arrêté. Les
+   messages sont groupés par auteur, avec l'heure et le jour.
+   - **Écrire** : Entrée envoie, Maj+Entrée va à la ligne. `**gras**`,
+     `*italique*`, `~~barré~~`, `` `code` `` ; les liens `https://…` sont
+     cliquables (ils s'ouvrent dans ton navigateur).
    - **Répondre, réagir, modifier, supprimer** : survole un message (ou clic
      droit dessus). Flèche du haut dans la zone de saisie : modifier ton
-     dernier message. Le créateur et les admins peuvent supprimer les
-     messages des autres.
+     dernier message. Une suppression est confirmée (Maj+clic sur la
+     corbeille pour s'en passer). Le créateur et les admins peuvent supprimer
+     les messages des autres.
    - **Mentions** : tape `@` puis le début d'un pseudo (Tab complète) ;
      `@tous` prévient tout le monde. Une mention te notifie même si l'appli est
      en arrière-plan (notification Windows, la barre des tâches clignote, le
      nombre de messages non lus s'affiche dans le titre).
-   - **Images et fichiers** : bouton « ＋ » ou glisser-déposer dans la fenêtre,
-     jusqu'à 10 fichiers de 25 Mo par message. Les images s'affichent dans le
-     fil ; un clic les enregistre dans Téléchargements (rien n'est ouvert
-     automatiquement).
+   - **Images et fichiers** : bouton « ＋ », glisser-déposer dans la fenêtre ou
+     Ctrl+V pour une image copiée (capture d'écran…), jusqu'à 10 fichiers de
+     25 Mo par message. Les images s'affichent dans le fil ; un clic les ouvre
+     en grand, avec un bouton pour les enregistrer dans Téléchargements (rien
+     n'est ouvert automatiquement).
    - Deux personnes avec le même pseudo sont distinguées par un `#1a2b`.
    - Anti-spam : au-delà de quelques messages d'affilée, il faut attendre un
      instant.
