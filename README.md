@@ -33,7 +33,10 @@ launch.
 - **Invite codes**, hidden by default so they don't leak on a screen share or
   stream. Paste one in « Rejoindre » (Join) and that's it.
 - **Text channels**: replies, reactions, edits, deletions, `@mentions` (with
-  Windows notifications), images and files up to 25 MB (10 per message, saved to
+  Windows notifications), `**bold**`, `*italic*`, `~~strike~~`, `` `code` `` and
+  clickable links, multi-line messages (Shift+Enter), unread markers kept
+  across restarts, images and files up to 25 MB (10 per message, pasted with
+  Ctrl+V, dropped or picked; images open in a viewer, files are saved to
   Downloads on click, never opened automatically), anti-spam.
 - **Voice channels**: Opus audio sent directly from PC to PC, noise
   suppression (RNNoise), echo cancellation and automatic gain (WebRTC ports),

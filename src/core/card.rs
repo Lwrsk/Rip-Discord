@@ -708,7 +708,7 @@ impl SignedMessage {
             Kind::Text | Kind::Edit { .. } | Kind::Delete { .. } => {}
         }
         ensure!(
-            self.signer.verify(&self.body.signed_bytes(), &self.sig),
+            verified_once(&self.signer, &self.body.signed_bytes(), &self.sig),
             "signature du message invalide"
         );
         Ok(())
@@ -759,6 +759,38 @@ impl SignedMessage {
         })
         .filter(|m| m.verify(server).is_ok())
     }
+}
+
+/// Vérifie une signature de message, en se souvenant de celles déjà trouvées
+/// bonnes : un même message est revérifié souvent (historique renvoyé à
+/// chaque changement d'hôte, relu du disque, repris de la copie d'un membre),
+/// et une vérification Ed25519 coûte des centaines de fois plus cher que
+/// l'empreinte qui la remplace. Seules les signatures valides sont retenues,
+/// reconnues à l'empreinte de tout ce qui a été vérifié (clé, texte signé,
+/// signature) : rien ne passe qui n'aurait pas passé.
+fn verified_once(signer: &UserId, signed: &[u8], sig: &[u8]) -> bool {
+    /// Au-delà, on repart de zéro (quelques Mo au plus).
+    const MAX_REMEMBERED: usize = 200_000;
+    static GOOD: std::sync::Mutex<Option<std::collections::HashSet<[u8; 32]>>> = std::sync::Mutex::new(None);
+    let mut ctx = ring::digest::Context::new(&SHA256);
+    ctx.update(&signer.0);
+    ctx.update(&(signed.len() as u64).to_le_bytes());
+    ctx.update(signed);
+    ctx.update(sig);
+    let key: [u8; 32] = ctx.finish().as_ref().try_into().expect("SHA-256 fait 32 octets");
+    if GOOD.lock().unwrap().get_or_insert_default().contains(&key) {
+        return true;
+    }
+    if !signer.verify(signed, sig) {
+        return false;
+    }
+    let mut good = GOOD.lock().unwrap();
+    let good = good.get_or_insert_default();
+    if good.len() >= MAX_REMEMBERED {
+        good.clear();
+    }
+    good.insert(key);
+    true
 }
 
 /// Retire les caractères qui inversent le sens d'écriture : sans eux,
@@ -935,6 +967,40 @@ mod tests {
         altered.body.body = "au revoir".into();
         assert!(altered.verify(card.id).is_err());
         assert!(msg.verify(ServerId([0; 16])).is_err());
+    }
+
+    /// Une signature déjà vérifiée n'est pas recalculée, mais rien de
+    /// modifié ne passe pour autant.
+    #[test]
+    fn signature_retenue_sans_laisser_passer_un_faux() {
+        let me = Identity::generate();
+        let other = Identity::generate();
+        let card = ServerCard::create(&me, "memo");
+        let msg = Message {
+            server: card.id,
+            channel: 1,
+            author_name: "alice".into(),
+            at_ms: now_ms(),
+            body: "vrai".into(),
+            kind: Kind::Text,
+        }
+        .sign(&me);
+        assert!(msg.verify(card.id).is_ok());
+        assert!(msg.verify(card.id).is_ok(), "deuxième vérification, de mémoire");
+
+        let mut forged = msg.clone();
+        forged.body.body = "faux".into();
+        assert!(forged.verify(card.id).is_err(), "texte changé");
+        let mut forged = msg.clone();
+        forged.signer = other.id();
+        assert!(forged.verify(card.id).is_err(), "attribué à un autre");
+        let mut forged = msg.clone();
+        forged.sig[0] ^= 1;
+        assert!(forged.verify(card.id).is_err(), "signature abîmée");
+        let mut forged = msg.clone();
+        forged.body.at_ms += 1;
+        assert!(forged.verify(card.id).is_err(), "heure changée");
+        assert!(msg.verify(card.id).is_ok());
     }
 
     #[test]

@@ -38,6 +38,13 @@ use crate::{
 const RETRY: Duration = Duration::from_secs(3);
 /// Temps laissé à une tentative de connexion directe.
 const DIAL_TIMEOUT: Duration = Duration::from_secs(8);
+/// Temps laissé à celui qui nous appelle pour se présenter.
+const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+/// Une connexion avec un membre qui n'est pas dans mon salon vocal est
+/// refermée passé ce délai (il a pu y entrer un instant avant que l'hôte ne
+/// me le dise : on lui laisse ce temps-là, sans rien lui envoyer ni rien
+/// écouter de lui).
+const STRAY_GRACE: Duration = Duration::from_secs(5);
 
 /// Le salon devient celui décrit par l'hôte : on ferme les connexions avec
 /// ceux qui en sont sortis.
@@ -69,6 +76,7 @@ enum Signal {
 
 struct Link {
     conn: Connection,
+    since: Instant,
     signals: mpsc::UnboundedSender<Signal>,
     /// Images de mon écran envoyées à ce participant.
     screen: Arc<screen::Lane>,
@@ -215,6 +223,16 @@ impl Mesh {
                 s.hold = None;
                 apply_room(&mut s);
             }
+            // Relié à quelqu'un qui n'est pas (ou plus) dans mon salon : on coupe.
+            let room = s.room.clone();
+            s.links.retain(|peer, link| {
+                let stray = !room.contains(peer) && link.since.elapsed() >= STRAY_GRACE;
+                if stray {
+                    debug!("vocal direct avec {peer} refermé : pas dans mon salon");
+                    link.conn.close(0u32.into(), b"pas dans le salon");
+                }
+                !stray
+            });
         }
         self.reconcile();
     }
@@ -236,6 +254,11 @@ impl Mesh {
             }
         }
         missing
+    }
+
+    /// `peer` est dans mon salon vocal (ou pas encore revenu après une relève).
+    fn in_room(&self, peer: PeerId) -> bool {
+        self.0.state.lock().unwrap().room.contains(&peer)
     }
 
     /// Connecté directement à `peer` ?
@@ -280,7 +303,8 @@ impl Mesh {
         let Some(me) = s.me else { return false };
         let wire = screen::to_member(me, frame);
         let mut want_key = false;
-        for w in &s.watchers {
+        // Seuls les participants de mon salon voient mon écran.
+        for w in s.watchers.iter().filter(|w| s.room.contains(w)) {
             if let Some(link) = s.links.get(w) {
                 want_key |= screen::offer(&link.conn, &link.screen, frame, &wire);
             }
@@ -316,7 +340,7 @@ impl Mesh {
         let s = self.0.state.lock().unwrap();
         let Some(me) = s.me else { return };
         let packet = screen::sound_to_member(screen::Sound { from: me, seq, opus });
-        for w in &s.watchers {
+        for w in s.watchers.iter().filter(|w| s.room.contains(w)) {
             if let Some(link) = s.links.get(w) {
                 let _ = link.conn.send_datagram(packet.clone());
             }
@@ -387,10 +411,14 @@ impl Mesh {
     }
 
     async fn accept(&self, conn: Connection) -> Result<()> {
-        let (mut send, mut recv) = timeout(Duration::from_secs(5), conn.accept_bi())
-            .await
-            .context("pas de présentation")??;
-        let hello: MeshHello = read_msg(&mut recv).await?.context("flux fermé")?;
+        // Une connexion muette (ou qui se présente au compte-gouttes) ne reste pas ouverte.
+        let (mut send, recv, hello) = timeout(HELLO_TIMEOUT, async {
+            let (send, mut recv) = conn.accept_bi().await?;
+            let hello: MeshHello = read_msg(&mut recv).await?.context("flux fermé")?;
+            anyhow::Ok((send, recv, hello))
+        })
+        .await
+        .context("pas de présentation")??;
         {
             let s = self.0.state.lock().unwrap();
             ensure!(Some(hello.server) == s.server, "autre serveur");
@@ -420,6 +448,7 @@ impl Mesh {
                 peer,
                 Link {
                     conn: conn.clone(),
+                    since: Instant::now(),
                     signals,
                     screen: Arc::default(),
                     camera: Arc::default(),
@@ -450,7 +479,9 @@ impl Mesh {
                     }
                     // Il a perdu le fil de ma webcam : rien ne lui part avant une image clé.
                     Signal::CameraKey => {
-                        if let Some(link) = s.links.get(&peer) {
+                        if let Some(link) = s.links.get(&peer)
+                            && s.room.contains(&peer)
+                        {
                             link.camera.reset(Some(Instant::now()));
                             let _ = mesh.0.camera_keys.send(peer);
                         }
@@ -460,6 +491,7 @@ impl Mesh {
                 // Il (re)commence : une image clé d'abord, demandée tout de suite.
                 if matches!(sig, Signal::Watch(true) | Signal::Key)
                     && s.watchers.contains(&peer)
+                    && s.room.contains(&peer)
                     && let Some(lane) = lane
                 {
                     lane.reset(Some(Instant::now()));
@@ -468,14 +500,15 @@ impl Mesh {
             }
         });
         // Images de son écran (si je le regarde) et de sa webcam.
-        let (images, tx) = (conn.clone(), self.0.screens.clone());
+        let (images, tx, mesh) = (conn.clone(), self.0.screens.clone(), self.clone());
         tokio::spawn(async move {
             while let Ok(mut stream) = images.accept_uni().await {
-                let tx = tx.clone();
+                let (tx, mesh) = (tx.clone(), mesh.clone());
                 tokio::spawn(async move {
                     if let Ok(data) = screen::recv(&mut stream).await
                         && let Some((from, frame)) = screen::from_host(&data)
                         && from == peer
+                        && mesh.in_room(peer)
                     {
                         let _ = tx.send((from, frame));
                     }
@@ -486,6 +519,10 @@ impl Mesh {
         let mesh = self.clone();
         tokio::spawn(async move {
             while let Ok(d) = conn.read_datagram().await {
+                // Rien n'est écouté de quelqu'un qui n'est pas dans mon salon.
+                if !mesh.in_room(peer) {
+                    continue;
+                }
                 if let Some(sound) = screen::sound_from_host(&d) {
                     if sound.from == peer {
                         let _ = mesh.0.sounds.send(SoundIn::from(sound));

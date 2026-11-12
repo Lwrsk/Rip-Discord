@@ -42,6 +42,8 @@ pub struct ServerView {
     /// Pseudo (en minuscules) → identités qui l'ont utilisé : deux personnes
     /// sous le même pseudo sont distinguées à l'affichage.
     names: HashMap<String, BTreeSet<UserId>>,
+    /// Heure du dernier message de chaque salon : (de n'importe qui, d'un autre que moi).
+    latest: HashMap<ChannelId, (u64, u64)>,
     store: Option<Store>,
     log: HistoryLog,
 }
@@ -92,6 +94,7 @@ impl ServerView {
             by_id: HashMap::new(),
             actions: HashMap::new(),
             names: HashMap::new(),
+            latest: HashMap::new(),
             store,
             log,
             card,
@@ -116,6 +119,16 @@ impl ServerView {
             .zip(&self.messages)
             .filter(move |(id, m)| m.body.channel == channel && !self.deleted(id, m))
             .map(|(id, m)| (*id, m))
+    }
+
+    /// Heure du dernier message du salon (0 s'il est vide).
+    pub fn latest(&self, channel: ChannelId) -> u64 {
+        self.latest.get(&channel).map_or(0, |l| l.0)
+    }
+
+    /// Heure du dernier message qu'un autre que moi a écrit dans le salon.
+    pub fn latest_from_others(&self, channel: ChannelId) -> u64 {
+        self.latest.get(&channel).map_or(0, |l| l.1)
     }
 
     /// Un message visible, par son identifiant.
@@ -341,7 +354,9 @@ impl ServerView {
     }
 
     fn show(&mut self, batch: Vec<SignedMessage>) {
-        let mut added = false;
+        // Les nouveaux messages, avec leur identifiant (une empreinte :
+        // calculée une fois, pas à chaque tri).
+        let mut fresh: Vec<(MessageId, SignedMessage)> = Vec::new();
         for m in batch {
             if !self.card.settings().is_text_channel(m.body.channel)
                 || m.from_future()
@@ -353,19 +368,62 @@ impl ServerView {
             match m.body.kind.target() {
                 Some(target) => self.actions.entry(target).or_default().push(m),
                 None => {
-                    self.messages.push(m);
-                    added = true;
+                    self.note_latest(&m);
+                    fresh.push((m.id(), m));
                 }
             }
         }
-        if added {
-            self.messages.sort_by_cached_key(|m| m.order());
-            self.reindex();
+        if fresh.is_empty() {
+            return;
+        }
+        fresh.sort_by_key(|(id, m)| (m.body.at_ms, *id));
+        let last = self
+            .messages
+            .last()
+            .zip(self.ids.last())
+            .map(|(m, id)| (m.body.at_ms, *id));
+        let in_order = last.is_none_or(|l| l <= (fresh[0].1.body.at_ms, fresh[0].0));
+        for (id, m) in fresh {
+            if in_order {
+                self.by_id.insert(id, self.messages.len());
+            }
+            self.ids.push(id);
+            self.messages.push(m);
+        }
+        if !in_order {
+            // Des messages plus anciens (repris de la copie d'un membre) : on
+            // remet tout dans l'ordre, sans recalculer les identifiants.
+            let mut all: Vec<(MessageId, SignedMessage)> = std::mem::take(&mut self.ids)
+                .into_iter()
+                .zip(std::mem::take(&mut self.messages))
+                .collect();
+            all.sort_by_key(|(id, m)| (m.body.at_ms, *id));
+            (self.ids, self.messages) = all.into_iter().unzip();
+            self.index();
         }
     }
 
+    fn note_latest(&mut self, m: &SignedMessage) {
+        let l = self.latest.entry(m.body.channel).or_default();
+        l.0 = l.0.max(m.body.at_ms);
+        if m.signer != self.me {
+            l.1 = l.1.max(m.body.at_ms);
+        }
+    }
+
+    /// Après un retrait de messages : identifiants et repères recalculés.
     fn reindex(&mut self) {
         self.ids = self.messages.iter().map(SignedMessage::id).collect();
+        self.index();
+        let messages = std::mem::take(&mut self.messages);
+        self.latest.clear();
+        for m in &messages {
+            self.note_latest(m);
+        }
+        self.messages = messages;
+    }
+
+    fn index(&mut self) {
         self.by_id = self.ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
     }
 }

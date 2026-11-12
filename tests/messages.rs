@@ -362,3 +362,76 @@ async fn pieces_jointes_et_relais_par_un_membre() {
     alice.files().put(&old).await.unwrap();
     assert_eq!(download.await.unwrap().unwrap(), old);
 }
+
+/// Des messages qui arrivent dans le désordre (repris de la copie d'un
+/// membre) se rangent à leur place, et la vue sait jusqu'où va chaque salon :
+/// de quoi signaler ce qu'on a manqué.
+#[tokio::test]
+async fn fil_dans_l_ordre_et_dernier_message_des_autres() {
+    let owner = Identity::generate();
+    let bob = Identity::generate();
+    let card = ServerCard::create(&owner, "ordre");
+    let general = card.settings().text_channels[0].id;
+    let addr = host(&card);
+    let (alice, _rx) = Client::connect(addr, card.access_key(), &owner, "alice").await.unwrap();
+    let mut view = ServerView::new(&alice, "alice", None);
+    assert_eq!((view.latest(general), view.latest_from_others(general)), (0, 0));
+
+    let t0 = now_ms() - 60_000;
+    let msg = |who: &Identity, name: &str, at: u64, body: &str| {
+        Message {
+            server: card.id,
+            channel: general,
+            author_name: name.into(),
+            at_ms: t0 + at,
+            body: body.into(),
+            kind: Kind::Text,
+        }
+        .sign(who)
+    };
+    let texts = |view: &ServerView| view.messages(general).map(|m| m.body.body.clone()).collect::<Vec<_>>();
+
+    // Dans l'ordre : ajoutés à la suite.
+    view.apply(&Event::History(vec![
+        msg(&bob, "bob", 10, "b"),
+        msg(&bob, "bob", 20, "c"),
+    ]));
+    view.push_own(msg(&owner, "alice", 40, "e"));
+    assert_eq!(texts(&view), ["b", "c", "e"]);
+    assert_eq!(view.latest(general), t0 + 40);
+    assert_eq!(
+        view.latest_from_others(general),
+        t0 + 20,
+        "mes messages ne comptent pas"
+    );
+
+    // Plus anciens, et un au milieu : remis à leur place, sans doublon.
+    let d = msg(&bob, "bob", 30, "d");
+    let batch = vec![d.clone(), msg(&bob, "bob", 0, "a"), msg(&bob, "bob", 50, "f")];
+    view.apply(&Event::History(batch.clone()));
+    view.apply(&Event::History(batch));
+    assert_eq!(texts(&view), ["a", "b", "c", "d", "e", "f"]);
+    assert_eq!(view.latest_from_others(general), t0 + 50);
+    // Chaque message se retrouve par son identifiant après le rangement.
+    for m in view.messages(general).cloned().collect::<Vec<_>>() {
+        assert_eq!(view.message(&m.id()), Some(&m));
+    }
+
+    // Une réaction ne compte pas pour un nouveau message.
+    let react = Message {
+        server: card.id,
+        channel: general,
+        author_name: "bob".into(),
+        at_ms: t0 + 55,
+        body: String::new(),
+        kind: Kind::React {
+            target: d.id(),
+            emoji: "👍".into(),
+            on: true,
+        },
+    }
+    .sign(&bob);
+    view.apply(&Event::History(vec![react]));
+    assert_eq!(view.latest_from_others(general), t0 + 50);
+    assert_eq!(view.reactions(&d).len(), 1);
+}

@@ -1,6 +1,6 @@
 [package]
 name = "rip-discord"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Chat vocal/texte local et privé, hôte dynamique (un seul binaire client/hôte)"
 license = "MIT OR Apache-2.0"
@@ -30,7 +30,8 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["ansi", "fmt", "registry", "smallvec", "std", "tracing-log"] }
 # « clipboard » : sans lui, Copier/Coller ne passe pas par le presse-papiers du système.
-eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "persistence", "wayland", "x11"] }
+# « links » : ouvre dans le navigateur les liens cliqués dans les messages.
+eframe = { version = "0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "links", "persistence", "wayland", "x11"] }
 igd-next = { version = "0.18.0", features = ["aio_tokio"] }
 local-ip-address = "0.6.13"
 egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"] }

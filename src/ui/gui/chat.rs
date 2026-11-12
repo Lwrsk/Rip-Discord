@@ -10,7 +10,7 @@ use std::{
 use chrono::{DateTime, Local, TimeZone};
 use eframe::egui::{self, Color32, Key, Margin, RichText, Stroke, text::LayoutJob, vec2};
 
-use super::{Cmd, Draft, FileState, icons, icons::Icon, style::*};
+use super::{Cmd, Draft, FileState, icons, icons::Icon, markup, style::*};
 use crate::{
     client::{EVERYONE, ServerView},
     core::{
@@ -66,6 +66,14 @@ pub struct Chat {
     /// hors de vue, un message n'est pas redessiné, juste sa place réservée.
     heights: HashMap<MessageId, f32>,
     heights_for: f32,
+    /// Message dont la suppression attend une confirmation.
+    deleting: Option<MessageId>,
+    /// Image ouverte en grand (et sa version détaillée, quand elle est prête).
+    viewing: Option<(FileRef, Option<egui::TextureHandle>)>,
+    /// Où ranger les images collées depuis le presse-papiers.
+    paste_dir: Option<PathBuf>,
+    /// Numéro de la prochaine image collée.
+    pasted: u32,
 }
 
 /// Saisie laissée dans un salon : on la retrouve en y revenant.
@@ -119,8 +127,34 @@ impl Chat {
         None
     }
 
+    /// Les images collées (Ctrl+V) sont rangées dans ce dossier, vidé à
+    /// chaque lancement.
+    pub fn with_paste_dir(mut self, dir: PathBuf) -> Self {
+        let _ = std::fs::remove_dir_all(&dir);
+        self.paste_dir = Some(dir);
+        self
+    }
+
+    /// L'image ouverte en grand est décodée en détail (ou n'a pas pu l'être).
+    pub fn picture_ready(&mut self, ctx: &egui::Context, hash: FileHash, image: Option<egui::ColorImage>) {
+        if let Some((f, tex)) = &mut self.viewing
+            && f.hash == hash
+            && let Some(image) = image
+        {
+            *tex = Some(ctx.load_texture("image-en-grand", image, egui::TextureOptions::LINEAR));
+        }
+    }
+
     /// Fil des messages d'un salon ; renvoie les commandes à envoyer.
-    pub fn messages(&mut self, ui: &mut egui::Ui, view: &ServerView, channel: ChannelId) -> Vec<Cmd> {
+    /// `new_after` : heure du dernier message déjà lu, s'il y en a de plus
+    /// récents à signaler par une ligne « Nouveaux messages ».
+    pub fn messages(
+        &mut self,
+        ui: &mut egui::Ui,
+        view: &ServerView,
+        channel: ChannelId,
+        new_after: Option<u64>,
+    ) -> Vec<Cmd> {
         let mut cmds = Vec::new();
         let now = ui.input(|i| i.time);
         self.files
@@ -131,14 +165,22 @@ impl Chat {
         let reacting = self.reacting.take();
         let pointer = ui
             .input(|i| i.pointer.hover_pos())
-            .filter(|p| ui.clip_rect().contains(*p));
+            .filter(|p| ui.clip_rect().contains(*p))
+            // Une fenêtre ouverte par-dessus : plus de survol en dessous.
+            .filter(|_| self.deleting.is_none() && self.viewing.is_none());
         let width = ui.available_width();
         if width != self.heights_for {
             self.heights.clear();
             self.heights_for = width;
         }
         let mut prev_day = None;
+        let mut new_line = new_after;
         for (id, m) in view.entries(channel) {
+            if new_line.is_some_and(|read| m.body.at_ms > read) {
+                new_line = None;
+                ui.add_space(8.0);
+                separator(ui, "Nouveaux messages", DANGER);
+            }
             let at = local(m.body.at_ms);
             let day = at.map(|t| t.date_naive());
             if day != prev_day
@@ -176,7 +218,11 @@ impl Chat {
                 .copied()
                 .unwrap_or_else(|| guess_height(m, grouped));
             let rect = egui::Rect::from_min_size(ui.cursor().min, vec2(width, h));
-            if !ui.is_rect_visible(rect.expand(80.0)) && reacting != Some(id) && self.hovered != Some(id) {
+            if !ui.is_rect_visible(rect.expand(80.0))
+                && reacting != Some(id)
+                && self.hovered != Some(id)
+                && self.deleting != Some(id)
+            {
                 ui.allocate_space(vec2(width, h));
                 continue;
             }
@@ -239,7 +285,151 @@ impl Chat {
         }
         self.hovered = hovered;
         ui.add_space(8.0);
+        self.confirm_delete(ui.ctx(), view, &mut cmds);
+        self.picture(ui.ctx(), &mut cmds);
         cmds
+    }
+
+    /// « Supprimer ce message ? » : une suppression est définitive, chez tout
+    /// le monde. Maj+clic sur la corbeille s'en passe.
+    fn confirm_delete(&mut self, ctx: &egui::Context, view: &ServerView, cmds: &mut Vec<Cmd>) {
+        let Some(id) = self.deleting else { return };
+        let Some(m) = view.message(&id) else {
+            self.deleting = None;
+            return;
+        };
+        let mut close = false;
+        let r = egui::Modal::new(egui::Id::unique("supprimer"))
+            .frame(card().inner_margin(24))
+            .show(ctx, |ui| {
+                ui.set_width(380.0);
+                ui.label(RichText::new("Supprimer ce message ?").size(18.0).strong().color(TEXT));
+                ui.add_space(6.0);
+                hint(
+                    ui,
+                    "Il disparaît pour tout le monde, avec ses réactions et ses fichiers. C'est définitif.",
+                );
+                ui.add_space(10.0);
+                egui::Frame::new()
+                    .fill(SURFACE)
+                    .corner_radius(10)
+                    .inner_margin(Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(
+                            RichText::new(view.author(m))
+                                .strong()
+                                .color(color_for(&m.body.author_name)),
+                        );
+                        let text = match (excerpt(view.text(m), 160), &m.body.kind) {
+                            (t, Kind::Rich { files, .. }) if t.is_empty() && !files.is_empty() => {
+                                "(fichier joint)".into()
+                            }
+                            (t, _) => t,
+                        };
+                        ui.add(egui::Label::new(RichText::new(text).color(TEXT)).wrap());
+                    });
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    let w = (ui.available_width() - 10.0) / 2.0;
+                    if ui.add(secondary_button("Annuler", w)).clicked() {
+                        close = true;
+                    }
+                    let confirm = Tinted::new(
+                        egui::Button::new(RichText::new("Supprimer").strong().color(Color32::WHITE))
+                            .min_size(vec2(w, 44.0)),
+                        DANGER.gamma_multiply(0.75),
+                        Stroke::new(1.0, DANGER),
+                    );
+                    if ui.add(confirm).clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+                        cmds.push(delete(m));
+                        close = true;
+                    }
+                });
+                hint(ui, "Astuce : Maj + clic sur la corbeille supprime sans demander.");
+            });
+        if close || r.should_close() {
+            self.deleting = None;
+        }
+    }
+
+    /// Demande de suppression : confirmation, sauf avec Maj.
+    fn ask_delete(&mut self, ui: &egui::Ui, m: &SignedMessage, cmds: &mut Vec<Cmd>) {
+        if ui.input(|i| i.modifiers.shift) {
+            cmds.push(delete(m));
+        } else {
+            self.deleting = Some(m.id());
+        }
+    }
+
+    /// Image ouverte en grand : clic à côté ou Échap pour fermer.
+    fn picture(&mut self, ctx: &egui::Context, cmds: &mut Vec<Cmd>) {
+        let Some((file, detailed)) = &self.viewing else { return };
+        let preview = match self.files.get_mut(&file.hash) {
+            Some(Attachment::Ready { image: Some(tex), seen }) => {
+                // Tant qu'elle est ouverte, l'aperçu n'est pas déchargé.
+                *seen = ctx.input(|i| i.time);
+                Some(tex.clone())
+            }
+            _ => None,
+        };
+        let Some(tex) = detailed.clone().or(preview) else {
+            self.viewing = None;
+            return;
+        };
+        let screen = ctx.content_rect().size();
+        let room = vec2((screen.x - 120.0).max(200.0), (screen.y - 190.0).max(150.0));
+        // À sa taille réelle si elle tient, réduite sinon.
+        let (w, h) = file
+            .image
+            .map_or((tex.size()[0] as f32, tex.size()[1] as f32), |(w, h)| {
+                (w as f32, h as f32)
+            });
+        let scale = (room.x / w.max(1.0)).min(room.y / h.max(1.0)).min(1.0);
+        let mut close = false;
+        let mut save = false;
+        let r = egui::Modal::new(egui::Id::unique("image"))
+            .frame(card().inner_margin(14))
+            .show(ctx, |ui| {
+                ui.add(
+                    egui::Image::from_texture(&tex)
+                        .fit_to_exact_size(vec2(w * scale, h * scale))
+                        .corner_radius(8),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("{} · {}", plain_text(&file.name), human_size(file.size)))
+                                .color(MUTED)
+                                .small(),
+                        )
+                        .truncate(),
+                    );
+                    at_right(ui, |ui| {
+                        if ui
+                            .add(icons::Button::new(Icon::Close))
+                            .on_hover_text("Fermer (Échap)")
+                            .clicked()
+                        {
+                            close = true;
+                        }
+                        if ui
+                            .add(egui::Button::new("Enregistrer"))
+                            .on_hover_text("Copier dans Téléchargements")
+                            .clicked()
+                        {
+                            save = true;
+                        }
+                    });
+                });
+            });
+        if save {
+            cmds.push(Cmd::Save(file.clone()));
+        }
+        if close || r.should_close() {
+            self.viewing = None;
+        }
     }
 
     /// « ↪ Nom : début du message » au-dessus d'une réponse.
@@ -257,22 +447,10 @@ impl Chat {
     /// Texte, pièces jointes et réactions d'un message.
     fn body(&mut self, ui: &mut egui::Ui, view: &ServerView, m: &SignedMessage, cmds: &mut Vec<Cmd>) -> egui::Response {
         let text = view.text(m);
-        let mut job = rich_text(ui, text, view);
-        if view.edited(m) {
-            job.append(
-                " (modifié)",
-                0.0,
-                egui::TextFormat {
-                    font_id: egui::FontId::proportional(11.5),
-                    color: MUTED,
-                    ..Default::default()
-                },
-            );
-        }
         let r = if text.is_empty() && !view.edited(m) {
             ui.allocate_response(vec2(0.0, 0.0), egui::Sense::hover())
         } else {
-            ui.add(egui::Label::new(job).wrap())
+            message_text(ui, text, view, view.edited(m))
         };
         if let Kind::Rich { files, .. } = &m.body.kind {
             for f in files {
@@ -334,13 +512,23 @@ impl Chat {
                             .corner_radius(8)
                             .sense(egui::Sense::click()),
                     )
-                    .on_hover_text(format!(
-                        "{} ({size}) — clic : enregistrer dans Téléchargements",
-                        plain_text(&f.name)
-                    ));
-                if r.clicked() {
-                    cmds.push(Cmd::Save(f.clone()));
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(format!("{} ({size}) — clic : voir en grand", plain_text(&f.name)));
+                if clicked_on(ui, &r) {
+                    self.viewing = Some((f.clone(), None));
+                    cmds.push(Cmd::View(f.clone()));
                 }
+                r.context_menu(|ui| {
+                    if ui.button("Voir en grand").clicked() {
+                        self.viewing = Some((f.clone(), None));
+                        cmds.push(Cmd::View(f.clone()));
+                        ui.close();
+                    }
+                    if ui.button("Enregistrer dans Téléchargements").clicked() {
+                        cmds.push(Cmd::Save(f.clone()));
+                        ui.close();
+                    }
+                });
                 return;
             }
             Some(Attachment::Loading) if f.image.is_some() => {
@@ -454,7 +642,7 @@ impl Chat {
                                     .on_hover_text(if own { "Supprimer" } else { "Supprimer (modération)" })
                                     .clicked()
                             {
-                                cmds.push(delete(m));
+                                self.ask_delete(ui, m, cmds);
                             }
                         });
                     });
@@ -481,12 +669,18 @@ impl Chat {
             ui.ctx().copy_text(view.text(m).to_string());
             ui.close();
         }
+        if let Some(link) = markup::parse(view.text(m)).into_iter().find(|s| s.link)
+            && ui.button("Copier le lien").clicked()
+        {
+            ui.ctx().copy_text(link.text);
+            ui.close();
+        }
         if m.signer == view.me && ui.button("Modifier").clicked() {
             self.edit(view, m);
             ui.close();
         }
         if view.can_delete(m) && ui.button(RichText::new("Supprimer").color(DANGER)).clicked() {
-            cmds.push(delete(m));
+            self.ask_delete(ui, m, cmds);
             ui.close();
         }
     }
@@ -518,6 +712,24 @@ impl Chat {
         let dropped: Vec<PathBuf> = ui.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if !dropped.is_empty() && channel != 0 {
             self.attach(dropped);
+        }
+        // Image collée (Ctrl+V d'une capture d'écran, par exemple).
+        let pasted: Vec<_> = ui.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::PasteImage(image) => Some(image.clone()),
+                    _ => None,
+                })
+                .collect()
+        });
+        if channel != 0 && self.editing.is_none() {
+            for image in pasted {
+                match self.keep_pasted(&image) {
+                    Ok(path) => self.attach(vec![path]),
+                    Err(e) => tracing::warn!("image collée : {e:#}"),
+                }
+            }
         }
 
         if let Some(target) = self.editing.or(self.reply_to) {
@@ -587,16 +799,40 @@ impl Chat {
             ui.horizontal(|ui| {
                 let attach = ui
                     .add(icons::Button::new(Icon::Plus).kind(icons::Look::Secondary).height(40.0))
-                    .on_hover_text("Joindre des fichiers ou des images (ou glisse-les sur la fenêtre)");
+                    .on_hover_text(
+                        "Joindre des fichiers ou des images (ou glisse-les sur la fenêtre ; Ctrl+V colle une image)",
+                    );
                 if attach.clicked() && self.picking.is_none() && self.editing.is_none() {
                     self.pick_files();
                 }
-                let field = ui.add(
-                    text_field(&mut self.input, &hint_text)
-                        .char_limit(MAX_MESSAGE_CHARS)
-                        .margin(Margin::symmetric(14, 12))
-                        .id_salt("saisie"),
-                );
+                // Entrée envoie, Maj+Entrée va à la ligne : le champ grandit
+                // avec le texte, jusqu'à quelques lignes.
+                let id = ui.make_persistent_id("saisie");
+                if ui.memory(|m| m.has_focus(id)) {
+                    send = ui.input_mut(|i| {
+                        let before = i.events.len();
+                        i.events.retain(|e| {
+                            !matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers, .. } if !modifiers.shift)
+                        });
+                        i.events.len() != before
+                    });
+                }
+                let field = egui::ScrollArea::vertical()
+                    .id_salt("saisie-lignes")
+                    .max_height(132.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.input)
+                                .id(id)
+                                .hint_text(RichText::new(&hint_text).color(MUTED))
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(1)
+                                .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, Key::Enter))
+                                .char_limit(MAX_MESSAGE_CHARS)
+                                .margin(Margin::symmetric(14, 12)),
+                        )
+                    })
+                    .inner;
                 if std::mem::take(&mut self.focus_input) {
                     field.request_focus();
                 }
@@ -613,10 +849,6 @@ impl Chat {
                         self.cancel();
                     }
                 }
-                if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                    send = true;
-                    field.request_focus();
-                }
             });
             if send && let Some(c) = self.submit(view, channel) {
                 cmds.push(c);
@@ -630,6 +862,33 @@ impl Chat {
             self.input.clear();
         }
         self.reply_to = None;
+    }
+
+    /// Enregistre une image collée (en PNG) pour la joindre comme un fichier.
+    fn keep_pasted(&mut self, image: &egui::ColorImage) -> anyhow::Result<PathBuf> {
+        use anyhow::Context as _;
+        let dir = self
+            .paste_dir
+            .clone()
+            .context("pas de dossier pour les images collées")?;
+        let [w, h] = image.size;
+        anyhow::ensure!(w > 0 && h > 0, "image vide");
+        let rgba: Vec<u8> = image.pixels.iter().flat_map(|p| p.to_srgba_unmultiplied()).collect();
+        let picture = image::RgbaImage::from_raw(w as u32, h as u32, rgba).context("image illisible")?;
+        std::fs::create_dir_all(&dir)?;
+        self.pasted += 1;
+        let name = format!(
+            "image-{}{}.png",
+            Local::now().format("%Y-%m-%d-%Hh%M"),
+            if self.pasted > 1 {
+                format!("-{}", self.pasted)
+            } else {
+                String::new()
+            }
+        );
+        let path = dir.join(name);
+        picture.save_with_format(&path, image::ImageFormat::Png)?;
+        Ok(path)
     }
 
     fn attach(&mut self, paths: Vec<PathBuf>) {
@@ -748,47 +1007,135 @@ fn delete(m: &SignedMessage) -> Cmd {
     }
 }
 
-/// Texte d'un message, les « @mentions » en couleur.
-fn rich_text(ui: &egui::Ui, text: &str, view: &ServerView) -> LayoutJob {
+/// Texte d'un message : mise en forme, « @mentions » en couleur, liens
+/// cliquables. Le texte reste sélectionnable.
+fn message_text(ui: &mut egui::Ui, text: &str, view: &ServerView, edited: bool) -> egui::Response {
+    let spans = markup::parse(text);
     let font = egui::TextStyle::Body.resolve(ui.style());
-    let plain = egui::TextFormat {
-        font_id: font.clone(),
-        color: TEXT,
-        ..Default::default()
-    };
     let my_name = view.peers.get(&view.my_peer).map(|p| p.name.to_lowercase());
     let mut job = LayoutJob::default();
-    for (i, word) in text.split(' ').enumerate() {
-        if i > 0 {
-            job.append(" ", 0.0, plain.clone());
+    // La police n'a pas de gras : le texte en gras est repassé, décalé d'un
+    // demi-point, par une copie du texte où tout le reste est transparent.
+    let has_bold = spans.iter().any(|s| s.bold && !s.code);
+    let mut over = LayoutJob::default();
+    // Liens : caractères couverts dans le texte affiché, et adresse.
+    let mut links: Vec<(std::ops::Range<usize>, &str)> = Vec::new();
+    let mut chars = 0;
+    for s in &spans {
+        let mut format = egui::TextFormat {
+            font_id: font.clone(),
+            color: TEXT,
+            italics: s.italic,
+            ..Default::default()
+        };
+        if s.strike {
+            format.strikethrough = Stroke::new(1.0, MUTED);
+            format.color = MUTED;
         }
-        if word.len() > 1 && word.starts_with('@') {
-            let bare = word.trim_end_matches(|c: char| !c.is_alphanumeric()).to_lowercase();
+        if s.code {
+            format.font_id = egui::FontId::monospace(font.size - 1.0);
+            format.background = FIELD;
+        } else if s.link {
+            format.color = ACCENT_HOVER;
+            links.push((chars..chars + s.text.chars().count(), &s.text));
+        } else if s.mention {
+            let bare = s.text.to_lowercase();
             let me = my_name.as_ref().is_some_and(|n| bare == format!("@{n}")) || EVERYONE.contains(&bare.as_str());
-            job.append(
-                word,
+            format.color = if me { WARN } else { ACCENT_HOVER };
+            format.background = if me {
+                WARN.gamma_multiply(0.14)
+            } else {
+                ACCENT.gamma_multiply(0.16)
+            };
+        }
+        chars += s.text.chars().count();
+        if has_bold {
+            over.append(
+                &s.text,
                 0.0,
                 egui::TextFormat {
-                    font_id: font.clone(),
-                    color: if me { WARN } else { ACCENT_HOVER },
-                    background: if me {
-                        WARN.gamma_multiply(0.14)
+                    color: if s.bold && !s.code {
+                        format.color
                     } else {
-                        ACCENT.gamma_multiply(0.16)
+                        Color32::TRANSPARENT
                     },
-                    ..Default::default()
+                    background: Color32::TRANSPARENT,
+                    strikethrough: Stroke::NONE,
+                    underline: Stroke::NONE,
+                    ..format.clone()
                 },
             );
-        } else {
-            job.append(word, 0.0, plain.clone());
         }
+        job.append(&s.text, 0.0, format);
     }
-    job
+    if edited {
+        let note = egui::TextFormat {
+            font_id: egui::FontId::proportional(11.5),
+            color: MUTED,
+            ..Default::default()
+        };
+        if has_bold {
+            over.append(
+                " (modifié)",
+                0.0,
+                egui::TextFormat {
+                    color: Color32::TRANSPARENT,
+                    ..note.clone()
+                },
+            );
+        }
+        job.append(" (modifié)", 0.0, note);
+    }
+    job.wrap.max_width = ui.available_width();
+    over.wrap.max_width = job.wrap.max_width;
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    let mut r = ui.add(egui::Label::new(galley.clone()));
+    if has_bold && ui.is_rect_visible(r.rect) {
+        let over = ui.fonts_mut(|f| f.layout_job(over));
+        ui.painter()
+            .galley(r.rect.min + vec2(0.6, 0.0), over, Color32::TRANSPARENT);
+    }
+    if !links.is_empty()
+        && ui.rect_contains_pointer(r.rect)
+        && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
+        && let Some(at) = char_at(&galley, pointer - r.rect.min)
+        && let Some((_, url)) = links.iter().find(|(range, _)| range.contains(&at))
+    {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        if clicked_on(ui, &r) && markup::safe_url(url) {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(*url));
+        }
+        r = r.on_hover_text(format!("Ouvrir dans le navigateur :\n{url}"));
+    }
+    r
+}
+
+/// Clic sur un élément d'un message. La ligne entière du message capte déjà
+/// les clics (menu du clic droit) : on regarde donc le pointeur lui-même.
+fn clicked_on(ui: &egui::Ui, r: &egui::Response) -> bool {
+    r.clicked() || (ui.rect_contains_pointer(r.rect) && ui.input(|i| i.pointer.primary_clicked()))
+}
+
+/// Caractère du texte affiché sous ce point (relatif au coin du texte).
+fn char_at(galley: &egui::Galley, at: egui::Vec2) -> Option<usize> {
+    let mut index = 0;
+    for row in &galley.rows {
+        if row.rect().contains(at.to_pos2()) {
+            let x = at.x - row.pos.x;
+            return row
+                .glyphs
+                .iter()
+                .position(|g| x >= g.pos.x && x < g.pos.x + g.advance_width)
+                .map(|i| index + i);
+        }
+        index += row.glyphs.len() + usize::from(row.ends_with_newline);
+    }
+    None
 }
 
 /// Hauteur probable d'un message pas encore affiché (corrigée dès qu'il l'est).
 fn guess_height(m: &SignedMessage, grouped: bool) -> f32 {
-    let lines = 1 + m.body.body.len() / 90;
+    let lines = m.body.body.lines().map(|l| 1 + l.len() / 90).sum::<usize>().max(1);
     let files = match &m.body.kind {
         Kind::Rich { files, .. } => files.iter().map(|f| if f.image.is_some() { 260.0 } else { 56.0 }).sum(),
         _ => 0.0,
@@ -815,18 +1162,30 @@ fn human_size(bytes: u64) -> String {
 
 /// Ligne « ─── Aujourd'hui ─── » entre deux jours.
 fn day_separator(ui: &mut egui::Ui, label: &str) {
+    separator(ui, label, MUTED);
+}
+
+/// Ligne avec un mot au milieu : le jour, ou « Nouveaux messages ».
+fn separator(ui: &mut egui::Ui, label: &str, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), egui::Sense::hover());
     let p = ui.painter();
-    let galley = p.layout_no_wrap(label.to_string(), egui::FontId::proportional(12.5), MUTED);
+    let galley = p.layout_no_wrap(label.to_string(), egui::FontId::proportional(12.5), color);
     let c = rect.center();
     let half = galley.size().x / 2.0 + 10.0;
-    let line = Stroke::new(1.0, BORDER);
+    let line = Stroke::new(
+        1.0,
+        if color == MUTED {
+            BORDER
+        } else {
+            color.gamma_multiply(0.6)
+        },
+    );
     p.hline(rect.left()..=c.x - half, c.y, line);
     p.hline(c.x + half..=rect.right(), c.y, line);
     p.galley(
         egui::pos2(c.x - galley.size().x / 2.0, c.y - galley.size().y / 2.0),
         galley,
-        MUTED,
+        color,
     );
 }
 
@@ -905,7 +1264,7 @@ mod tests {
             let mut out = Vec::new();
             let mut full = ctx.run_ui(input, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
-                    out.extend(chat.messages(ui, &view, general));
+                    out.extend(chat.messages(ui, &view, general, None));
                     out.extend(chat.input(ui, &view, general, "général"));
                 });
             });
@@ -999,7 +1358,7 @@ mod tests {
                     egui::ScrollArea::vertical()
                         .auto_shrink(false)
                         .stick_to_bottom(true)
-                        .show(ui, |ui| chat.messages(ui, &view, general));
+                        .show(ui, |ui| chat.messages(ui, &view, general, None));
                 });
             });
             ctx.tessellate(full.shapes, full.pixels_per_point);
@@ -1015,6 +1374,187 @@ mod tests {
             frame(&mut chat);
         }
         println!("image suivante : {:?}", t.elapsed() / 50);
+    }
+
+    /// Un hôte local, alice connectée, et sa vue du serveur.
+    async fn alice() -> (Client, ServerView, ChannelId) {
+        let owner = Identity::generate();
+        let card = ServerCard::create(&owner, "fil");
+        let general = card.settings().text_channels[0].id;
+        let host = Host::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            card.clone(),
+            HistoryLog::in_memory(card.id, card.history()),
+        )
+        .unwrap();
+        let addr = host.local_addr().unwrap();
+        tokio::spawn(host.run());
+        let (alice, _rx) = Client::connect(addr, card.access_key(), &owner, "alice").await.unwrap();
+        let view = ServerView::new(&alice, "alice", None);
+        (alice, view, general)
+    }
+
+    fn screen(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(900.0, 700.0))),
+            events,
+            ..Default::default()
+        }
+    }
+
+    fn key(key: Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    fn click(at: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    /// Un clic sur un lien l'ouvre dans le navigateur ; un clic à côté, non.
+    #[tokio::test]
+    async fn lien_cliquable() {
+        let (_alice, view, _) = alice().await;
+        let ctx = egui::Context::default();
+        let text = "va voir **ici** https://exemple.fr/page?x=1, c'est `bien`";
+        let place = std::cell::Cell::new(egui::Rect::NOTHING);
+        let frame = |events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(screen(events), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    place.set(message_text(ui, text, &view, false).rect);
+                });
+            });
+            out.textures_delta.clear();
+            out.platform_output
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    egui::OutputCommand::OpenUrl(u) => Some(u.url.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        frame(vec![]);
+        frame(vec![]);
+        // Où est le lien : on cherche son premier et son dernier caractère dans le texte posé.
+        let spans = markup::parse(text);
+        let before: usize = spans
+            .iter()
+            .take_while(|s| !s.link)
+            .map(|s| s.text.chars().count())
+            .sum();
+        let font = egui::FontId::proportional(15.0);
+        let width = |n: usize| {
+            let shown: String = spans.iter().flat_map(|s| s.text.chars()).take(n).collect();
+            ctx.fonts_mut(|f| f.layout_no_wrap(shown, font.clone(), Color32::WHITE).size().x)
+        };
+        let rect = place.get();
+        let y = rect.center().y;
+        let on_link = egui::pos2(rect.left() + width(before + 10), y);
+        let beside = egui::pos2(rect.left() + width(3), y);
+
+        for at in [beside, on_link] {
+            frame(vec![egui::Event::PointerMoved(at)]);
+            frame(vec![click(at, true)]);
+            let opened = frame(vec![click(at, false)]);
+            if at == on_link {
+                assert_eq!(opened, ["https://exemple.fr/page?x=1"]);
+            } else {
+                assert!(opened.is_empty(), "clic hors du lien : {opened:?}");
+            }
+        }
+    }
+
+    /// Entrée envoie, Maj+Entrée va à la ligne ; une image collée est jointe.
+    #[tokio::test]
+    async fn plusieurs_lignes_et_image_collee() {
+        let (_alice, view, general) = alice().await;
+        let dir = std::env::temp_dir().join(format!("rip-discord-colle-{}", std::process::id()));
+        let ctx = egui::Context::default();
+        let mut chat = Chat::default().with_paste_dir(dir.clone());
+        let frame = |chat: &mut Chat, events: Vec<egui::Event>| {
+            let mut out = Vec::new();
+            let mut full = ctx.run_ui(screen(events), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    out.extend(chat.input(ui, &view, general, "général"));
+                });
+            });
+            full.textures_delta.clear();
+            out
+        };
+        chat.focus_input = true;
+        frame(&mut chat, vec![]);
+        frame(&mut chat, vec![egui::Event::Text("ligne 1".into())]);
+        let sent = frame(&mut chat, vec![key(Key::Enter, egui::Modifiers::SHIFT)]);
+        assert!(sent.is_empty(), "Maj+Entrée n'envoie pas");
+        frame(&mut chat, vec![egui::Event::Text("ligne 2".into())]);
+        assert_eq!(chat.input, "ligne 1\nligne 2");
+
+        let image = egui::ColorImage::filled([8, 6], Color32::from_rgb(200, 30, 30));
+        frame(&mut chat, vec![egui::Event::PasteImage(std::sync::Arc::new(image))]);
+        assert_eq!(chat.attaching.len(), 1, "image collée jointe");
+        let pasted = image::open(&chat.attaching[0]).unwrap().to_rgba8();
+        assert_eq!((pasted.width(), pasted.height()), (8, 6));
+        assert_eq!(pasted.get_pixel(3, 3).0, [200, 30, 30, 255]);
+
+        let sent = frame(&mut chat, vec![key(Key::Enter, egui::Modifiers::NONE)]);
+        match sent.as_slice() {
+            [Cmd::Send(d)] => {
+                assert_eq!(d.body, "ligne 1\nligne 2");
+                assert_eq!(d.files.len(), 1);
+            }
+            _ => panic!("Entrée n'a rien envoyé"),
+        }
+        assert!(chat.input.is_empty() && chat.attaching.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Supprimer demande confirmation : rien ne part avant « Supprimer ».
+    #[tokio::test]
+    async fn suppression_confirmee() {
+        let (alice, mut view, general) = alice().await;
+        let m = alice.send_text(general, "oups").unwrap();
+        view.push_own(m.clone());
+        let ctx = egui::Context::default();
+        let mut chat = Chat::default();
+        let frame = |chat: &mut Chat, events: Vec<egui::Event>| {
+            let mut out = Vec::new();
+            let mut full = ctx.run_ui(screen(events), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    out.extend(chat.messages(ui, &view, general, Some(0)));
+                });
+            });
+            full.textures_delta.clear();
+            out
+        };
+        assert!(frame(&mut chat, vec![]).is_empty());
+        chat.deleting = Some(m.id());
+        assert!(
+            frame(&mut chat, vec![]).is_empty(),
+            "la question est posée, rien n'est supprimé"
+        );
+        assert!(frame(&mut chat, vec![]).is_empty());
+        // Échap : on garde le message.
+        frame(&mut chat, vec![key(Key::Escape, egui::Modifiers::NONE)]);
+        assert!(chat.deleting.is_none());
+        chat.deleting = Some(m.id());
+        frame(&mut chat, vec![]);
+        let sent = frame(&mut chat, vec![key(Key::Enter, egui::Modifiers::NONE)]);
+        assert!(
+            matches!(sent.as_slice(), [Cmd::Act { kind: Kind::Delete { target }, .. }] if *target == m.id()),
+            "Entrée confirme la suppression"
+        );
+        assert!(chat.deleting.is_none());
     }
 
     #[test]

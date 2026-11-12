@@ -80,6 +80,13 @@ const MAX_BACKFILL: usize = 20_000;
 const UPLOAD_BUDGET: u64 = 200 * 1024 * 1024;
 /// Pièces jointes gardées en mémoire par un hôte sans dossier (tests).
 const MEMORY_FILES: usize = 64 * 1024 * 1024;
+/// Transferts de pièces jointes menés de front pour un même membre (les
+/// suivants attendent leur tour).
+const MAX_TRANSFERS: usize = 16;
+/// Plus grand numéro qu'un membre peut demander à retrouver après une relève
+/// (bien au-delà de ce qu'un groupe atteint ; un numéro absurde ferait
+/// repartir la numérotation de zéro).
+const MAX_RESUME: PeerId = 1 << 24;
 
 impl Peer {
     fn push(&self, packet: Packet) {
@@ -745,8 +752,11 @@ async fn handle_peer(conn: Connection, state: Arc<State>) -> Result<()> {
                 let _ = tokio::time::timeout(Duration::from_secs(2), send.stopped()).await;
                 bail!(reason);
             }
-            let name: String = plain_text(name.trim()).chars().take(32).collect();
-            (name, user, resume)
+            let mut name: String = plain_text(name.trim()).chars().take(32).collect();
+            if name.trim().is_empty() {
+                name = format!("Membre {}", user.short());
+            }
+            (name, user, resume.filter(|r| (HOST_ID + 1..=MAX_RESUME).contains(r)))
         }
         Some(Packet::Control(Control::Hello { version, .. })) => {
             let reason = incompatible(version);
@@ -791,7 +801,7 @@ async fn handle_peer(conn: Connection, state: Arc<State>) -> Result<()> {
                 }
                 _ => loop {
                     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
-                    if !peers.contains_key(&id) {
+                    if id != HOST_ID && !peers.contains_key(&id) {
                         break (id, false);
                     }
                 },
@@ -1238,9 +1248,16 @@ fn accept_message(msg: &SignedMessage, sender: &UserId, state: &State) -> Result
 /// Transferts de pièces jointes : un flux bidirectionnel par fichier, ouvert
 /// par le membre après son flux de contrôle.
 async fn serve_files(conn: Connection, id: PeerId, state: Arc<State>) {
+    // Un membre qui ouvre des transferts par centaines attend son tour au lieu
+    // d'occuper la mémoire et de faire chercher l'hôte dans tous les sens.
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_TRANSFERS));
     while let Ok((mut send, mut recv)) = conn.accept_bi().await {
+        let Ok(slot) = slots.clone().acquire_owned().await else {
+            return;
+        };
         let state = state.clone();
         tokio::spawn(async move {
+            let _slot = slot;
             let result = match files::read_request(&mut recv).await {
                 Ok(FileRequest::Put { hash, size }) => receive_file(&mut send, &mut recv, id, hash, size, &state).await,
                 Ok(FileRequest::Get { hash }) => send_file(&mut send, id, hash, &state).await,
@@ -1268,7 +1285,7 @@ async fn receive_file(
         if p.uploads.1.elapsed() > Duration::from_secs(600) {
             p.uploads = (0, Instant::now());
         }
-        p.uploads.0 += size;
+        p.uploads.0 = p.uploads.0.saturating_add(size);
         p.uploads.0 <= UPLOAD_BUDGET
     };
     if !allowed {
