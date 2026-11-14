@@ -233,7 +233,7 @@ impl Chat {
                 .fill(if mention {
                     WARN.gamma_multiply(0.08)
                 } else if self.hovered == Some(id) || self.editing == Some(id) {
-                    SURFACE.gamma_multiply(0.55)
+                    Color32::from_white_alpha(6)
                 } else {
                     Color32::TRANSPARENT
                 })
@@ -250,7 +250,7 @@ impl Chat {
                 let time = at.map_or_else(String::new, |t| t.format("%H:%M").to_string());
                 if grouped {
                     ui.horizontal_top(|ui| {
-                        ui.add_space(42.0);
+                        ui.add_space(49.0);
                         ui.vertical(|ui| {
                             self.body(ui, view, m, &mut cmds).on_hover_text(&time);
                         });
@@ -262,9 +262,13 @@ impl Chat {
                         ui.add_space(2.0);
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(&name).strong().color(color_for(&m.body.author_name)))
-                                    .on_hover_text(format!("Identité : {}", m.signer.short()));
-                                ui.label(RichText::new(&time).color(MUTED).small());
+                                ui.label(
+                                    RichText::new(&name)
+                                        .semi()
+                                        .color(lighten(color_for(&m.body.author_name), 0.25)),
+                                )
+                                .on_hover_text(format!("Identité : {}", m.signer.short()));
+                                ui.label(RichText::new(&time).color(MUTED.gamma_multiply(0.85)).size(11.5));
                             });
                             self.body(ui, view, m, &mut cmds);
                         });
@@ -300,10 +304,11 @@ impl Chat {
         };
         let mut close = false;
         let r = egui::Modal::new(egui::Id::unique("supprimer"))
+            .backdrop_color(BACKDROP)
             .frame(card().inner_margin(24))
             .show(ctx, |ui| {
                 ui.set_width(380.0);
-                ui.label(RichText::new("Supprimer ce message ?").size(18.0).strong().color(TEXT));
+                ui.label(RichText::new("Supprimer ce message ?").size(18.0).semi().color(TEXT));
                 ui.add_space(6.0);
                 hint(
                     ui,
@@ -318,7 +323,7 @@ impl Chat {
                         ui.set_width(ui.available_width());
                         ui.label(
                             RichText::new(view.author(m))
-                                .strong()
+                                .semi()
                                 .color(color_for(&m.body.author_name)),
                         );
                         let text = match (excerpt(view.text(m), 160), &m.body.kind) {
@@ -336,7 +341,7 @@ impl Chat {
                         close = true;
                     }
                     let confirm = Tinted::new(
-                        egui::Button::new(RichText::new("Supprimer").strong().color(Color32::WHITE))
+                        egui::Button::new(RichText::new("Supprimer").semi().color(Color32::WHITE))
                             .min_size(vec2(w, 44.0)),
                         DANGER.gamma_multiply(0.75),
                         Stroke::new(1.0, DANGER),
@@ -796,9 +801,30 @@ impl Chat {
                 self.focus_input = true;
             }
             let mut send = false;
-            ui.horizontal(|ui| {
+            // Le champ et le bouton « + » dans une même capsule, qui s'éclaire
+            // quand on écrit.
+            let id = ui.make_persistent_id("saisie");
+            let focused = ui.memory(|m| m.has_focus(id));
+            let composer = egui::Frame::new()
+                .fill(SURFACE)
+                .stroke(Stroke::new(
+                    1.0,
+                    if focused {
+                        ACCENT.gamma_multiply(0.6)
+                    } else {
+                        BORDER
+                    },
+                ))
+                .corner_radius(14)
+                .inner_margin(Margin {
+                    left: 6,
+                    right: 10,
+                    top: 4,
+                    bottom: 4,
+                });
+            composer.show(ui, |ui| ui.horizontal(|ui| {
                 let attach = ui
-                    .add(icons::Button::new(Icon::Plus).kind(icons::Look::Secondary).height(40.0))
+                    .add(icons::Button::new(Icon::Plus).height(34.0))
                     .on_hover_text(
                         "Joindre des fichiers ou des images (ou glisse-les sur la fenêtre ; Ctrl+V colle une image)",
                     );
@@ -807,7 +833,6 @@ impl Chat {
                 }
                 // Entrée envoie, Maj+Entrée va à la ligne : le champ grandit
                 // avec le texte, jusqu'à quelques lignes.
-                let id = ui.make_persistent_id("saisie");
                 if ui.memory(|m| m.has_focus(id)) {
                     send = ui.input_mut(|i| {
                         let before = i.events.len();
@@ -820,6 +845,7 @@ impl Chat {
                 let field = egui::ScrollArea::vertical()
                     .id_salt("saisie-lignes")
                     .max_height(132.0)
+                    .min_scrolled_height(0.0)
                     .show(ui, |ui| {
                         ui.add(
                             egui::TextEdit::multiline(&mut self.input)
@@ -829,7 +855,7 @@ impl Chat {
                                 .desired_rows(1)
                                 .return_key(egui::KeyboardShortcut::new(egui::Modifiers::SHIFT, Key::Enter))
                                 .char_limit(MAX_MESSAGE_CHARS)
-                                .margin(Margin::symmetric(14, 12)),
+                                .frame(egui::Frame::NONE.inner_margin(Margin::symmetric(6, 9))),
                         )
                     })
                     .inner;
@@ -849,7 +875,7 @@ impl Chat {
                         self.cancel();
                     }
                 }
-            });
+            }));
             if send && let Some(c) = self.submit(view, channel) {
                 cmds.push(c);
             }
@@ -1014,10 +1040,6 @@ fn message_text(ui: &mut egui::Ui, text: &str, view: &ServerView, edited: bool) 
     let font = egui::TextStyle::Body.resolve(ui.style());
     let my_name = view.peers.get(&view.my_peer).map(|p| p.name.to_lowercase());
     let mut job = LayoutJob::default();
-    // La police n'a pas de gras : le texte en gras est repassé, décalé d'un
-    // demi-point, par une copie du texte où tout le reste est transparent.
-    let has_bold = spans.iter().any(|s| s.bold && !s.code);
-    let mut over = LayoutJob::default();
     // Liens : caractères couverts dans le texte affiché, et adresse.
     let mut links: Vec<(std::ops::Range<usize>, &str)> = Vec::new();
     let mut chars = 0;
@@ -1028,6 +1050,9 @@ fn message_text(ui: &mut egui::Ui, text: &str, view: &ServerView, edited: bool) 
             italics: s.italic,
             ..Default::default()
         };
+        if s.bold && !s.code {
+            format.font_id = semibold(font.size);
+        }
         if s.strike {
             format.strikethrough = Stroke::new(1.0, MUTED);
             format.color = MUTED;
@@ -1049,23 +1074,6 @@ fn message_text(ui: &mut egui::Ui, text: &str, view: &ServerView, edited: bool) 
             };
         }
         chars += s.text.chars().count();
-        if has_bold {
-            over.append(
-                &s.text,
-                0.0,
-                egui::TextFormat {
-                    color: if s.bold && !s.code {
-                        format.color
-                    } else {
-                        Color32::TRANSPARENT
-                    },
-                    background: Color32::TRANSPARENT,
-                    strikethrough: Stroke::NONE,
-                    underline: Stroke::NONE,
-                    ..format.clone()
-                },
-            );
-        }
         job.append(&s.text, 0.0, format);
     }
     if edited {
@@ -1074,27 +1082,11 @@ fn message_text(ui: &mut egui::Ui, text: &str, view: &ServerView, edited: bool) 
             color: MUTED,
             ..Default::default()
         };
-        if has_bold {
-            over.append(
-                " (modifié)",
-                0.0,
-                egui::TextFormat {
-                    color: Color32::TRANSPARENT,
-                    ..note.clone()
-                },
-            );
-        }
         job.append(" (modifié)", 0.0, note);
     }
     job.wrap.max_width = ui.available_width();
-    over.wrap.max_width = job.wrap.max_width;
     let galley = ui.fonts_mut(|f| f.layout_job(job));
     let mut r = ui.add(egui::Label::new(galley.clone()));
-    if has_bold && ui.is_rect_visible(r.rect) {
-        let over = ui.fonts_mut(|f| f.layout_job(over));
-        ui.painter()
-            .galley(r.rect.min + vec2(0.6, 0.0), over, Color32::TRANSPARENT);
-    }
     if !links.is_empty()
         && ui.rect_contains_pointer(r.rect)
         && let Some(pointer) = ui.input(|i| i.pointer.hover_pos())
@@ -1169,13 +1161,13 @@ fn day_separator(ui: &mut egui::Ui, label: &str) {
 fn separator(ui: &mut egui::Ui, label: &str, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), egui::Sense::hover());
     let p = ui.painter();
-    let galley = p.layout_no_wrap(label.to_string(), egui::FontId::proportional(12.5), color);
+    let galley = p.layout_no_wrap(label.to_string(), medium(11.5), color);
     let c = rect.center();
     let half = galley.size().x / 2.0 + 10.0;
     let line = Stroke::new(
         1.0,
         if color == MUTED {
-            BORDER
+            BORDER.gamma_multiply(0.8)
         } else {
             color.gamma_multiply(0.6)
         },

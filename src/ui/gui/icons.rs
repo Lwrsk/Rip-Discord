@@ -434,7 +434,7 @@ impl<'a> Button<'a> {
 
 impl Widget for Button<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
-        let font = FontId::proportional(if self.height >= 38.0 { 15.0 } else { 14.0 });
+        let font = medium(if self.height >= 38.0 { 14.5 } else { 13.5 });
         let icon_size = (self.height * 0.5).clamp(14.0, 20.0);
         let galley = self
             .label
@@ -458,7 +458,18 @@ impl Widget for Button<'_> {
         let fg = self.color.unwrap_or(fg);
         let fade = |c: Color32| if enabled { c } else { c.gamma_multiply(0.45) };
         let p = ui.painter();
-        let radius = CornerRadius::same(if self.height >= 38.0 { 12 } else { 10 });
+        let radius = CornerRadius::same(if self.height >= 38.0 { 11 } else { 9 });
+        let solid = matches!(self.kind, Look::Primary | Look::DangerSolid);
+        if solid && enabled {
+            // Lueur colorée sous les boutons pleins.
+            let glow = egui::epaint::Shadow {
+                offset: [0, 4],
+                blur: if hot { 18 } else { 12 },
+                spread: 0,
+                color: fill.gamma_multiply(if hot { 0.42 } else { 0.28 }),
+            };
+            p.add(glow.as_shape(rect, radius));
+        }
         p.rect(
             rect,
             radius,
@@ -466,6 +477,15 @@ impl Widget for Button<'_> {
             Stroke::new(1.0, fade(stroke)),
             StrokeKind::Inside,
         );
+        if solid || self.kind == Look::Secondary {
+            // Reflet d'un pixel en haut : donne du relief sans dégradé.
+            let r = f32::from(radius.nw);
+            p.hline(
+                (rect.left() + r)..=(rect.right() - r),
+                rect.top() + 1.5,
+                Stroke::new(1.0, Color32::from_white_alpha(if solid { 46 } else { 12 })),
+            );
+        }
         let mut x = rect.center().x - content / 2.0;
         if let Some(i) = self.icon {
             let ir = Rect::from_center_size(pos2(x + icon_size / 2.0, rect.center().y), Vec2::splat(icon_size));
@@ -498,13 +518,13 @@ fn colors(kind: Look, hot: bool, down: bool) -> (Color32, Color32, Color32) {
     };
     match kind {
         Look::Primary => (
-            pick(ACCENT, ACCENT_HOVER, ACCENT_HOVER.gamma_multiply(0.9)),
+            pick(ACCENT, lighten(ACCENT, 0.12), darken(ACCENT, 0.1)),
             Color32::TRANSPARENT,
             Color32::WHITE,
         ),
         Look::Secondary | Look::Toggle(false) => (
             pick(SURFACE, HOVER, PRESSED),
-            pick(BORDER, ACCENT.gamma_multiply(0.6), ACCENT),
+            pick(BORDER, lighten(BORDER, 0.12), ACCENT.gamma_multiply(0.7)),
             if hot { TEXT } else { TEXT.gamma_multiply(0.92) },
         ),
         Look::Ghost => (
@@ -553,14 +573,14 @@ pub fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, strong: bo
     let hot = r.hovered();
     let p = ui.painter();
     if selected {
-        p.rect_filled(rect, 9, ACCENT.gamma_multiply(0.2));
+        p.rect_filled(rect, 8, Color32::from_white_alpha(14));
         p.rect_filled(
-            Rect::from_min_size(rect.min + vec2(0.0, 8.0), vec2(3.0, h - 16.0)),
+            Rect::from_min_size(rect.min + vec2(0.0, 9.0), vec2(3.0, h - 18.0)),
             2,
             ACCENT_HOVER,
         );
     } else if hot {
-        p.rect_filled(rect, 9, HOVER.gamma_multiply(0.85));
+        p.rect_filled(rect, 8, Color32::from_white_alpha(8));
     }
     let fg = if selected || strong || hot { TEXT } else { MUTED };
     let ir = Rect::from_center_size(pos2(rect.left() + 20.0, rect.center().y), Vec2::splat(17.0));
@@ -591,7 +611,11 @@ pub fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, strong: bo
             right = br.left() - 6.0;
         }
     }
-    let font = FontId::proportional(14.5);
+    let font = if selected || strong {
+        medium(14.0)
+    } else {
+        FontId::proportional(14.0)
+    };
     let max = (right - (rect.left() + 36.0)).max(10.0);
     let mut job = egui::text::LayoutJob::simple_singleline(label.to_owned(), font, fg);
     job.wrap = egui::text::TextWrapping::truncate_at_width(max);
@@ -613,11 +637,12 @@ pub fn switch(ui: &mut Ui, on: &mut bool) -> Response {
         let t = ui.ctx().animate_bool_responsive(r.id, *on);
         let enabled = ui.is_enabled();
         let fade = |c: Color32| if enabled { c } else { c.gamma_multiply(0.45) };
-        let off_fill = if r.hovered() { HOVER } else { BORDER };
+        let off_fill = if r.hovered() { lighten(BORDER, 0.1) } else { BORDER };
         let fill = off_fill.lerp_to_gamma(ACCENT, t);
         let p = ui.painter();
         p.rect_filled(rect, 11, fade(fill));
         let x = egui::lerp((rect.left() + 11.0)..=(rect.right() - 11.0), t);
+        p.circle_filled(pos2(x, rect.center().y + 1.0), 8.5, Color32::from_black_alpha(60));
         p.circle_filled(pos2(x, rect.center().y), 8.0, fade(Color32::WHITE));
         if enabled {
             r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -629,12 +654,12 @@ pub fn switch(ui: &mut Ui, on: &mut bool) -> Response {
 /// Titre d'un groupe de réglages, au-dessus de sa carte.
 pub fn group(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     if !title.is_empty() {
-        ui.label(RichText::new(title.to_uppercase()).color(MUTED).size(11.5).strong());
+        ui.label(caps(title));
         ui.add_space(2.0);
     }
     egui::Frame::new()
-        .fill(SURFACE.gamma_multiply(0.75))
-        .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.75)))
+        .fill(SURFACE.gamma_multiply(0.7))
+        .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.8)))
         .corner_radius(12)
         .inner_margin(egui::Margin::symmetric(16, 12))
         .show(ui, |ui| {
@@ -672,11 +697,11 @@ pub fn row_with(ui: &mut Ui, icon_: Option<Icon>, title: &str, desc: &str, contr
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     icon(ui, i, 18.0, MUTED);
-                    ui.label(RichText::new(title).color(TEXT));
+                    ui.label(RichText::new(title).color(TEXT).medium());
                 });
                 26.0
             } else {
-                ui.label(RichText::new(title).color(TEXT));
+                ui.label(RichText::new(title).color(TEXT).medium());
                 0.0
             };
             if !desc.is_empty() {
@@ -714,12 +739,16 @@ pub fn switch_row(ui: &mut Ui, title: &str, desc: &str, on: &mut bool) -> Respon
 
 /// Étiquette colorée (rôle, état).
 pub fn badge(ui: &mut Ui, color: Color32, text: &str) -> Response {
-    let g = ui
-        .painter()
-        .layout_no_wrap(text.to_owned(), FontId::proportional(11.5), color);
+    let g = ui.painter().layout_no_wrap(text.to_owned(), medium(11.0), color);
     let (rect, r) = ui.allocate_exact_size(vec2(g.size().x + 14.0, 20.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(rect, 10, color.gamma_multiply(0.16));
+    p.rect_filled(rect, 10, color.gamma_multiply(0.14));
+    p.rect_stroke(
+        rect,
+        10,
+        Stroke::new(1.0, color.gamma_multiply(0.25)),
+        StrokeKind::Inside,
+    );
     p.galley(rect.center() - g.size() / 2.0, g, color);
     r
 }
@@ -755,12 +784,13 @@ impl<T: Copy + PartialEq> Shell<'_, T> {
             .stroke(Stroke::new(1.0, BORDER))
             .corner_radius(16)
             .shadow(egui::epaint::Shadow {
-                offset: [0, 12],
-                blur: 40,
+                offset: [0, 18],
+                blur: 56,
                 spread: 0,
-                color: Color32::from_black_alpha(140),
+                color: Color32::from_black_alpha(150),
             });
         let r = egui::Modal::new(egui::Id::unique(self.id))
+            .backdrop_color(BACKDROP)
             .frame(frame)
             .show(ctx, |ui| {
                 ui.set_min_size(size);
@@ -789,9 +819,7 @@ impl<T: Copy + PartialEq> Shell<'_, T> {
                     ui.add_space(6.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 1.0;
-                        ui.add(
-                            egui::Label::new(RichText::new(self.heading).size(16.0).strong().color(TEXT)).truncate(),
-                        );
+                        ui.add(egui::Label::new(RichText::new(self.heading).size(16.0).semi().color(TEXT)).truncate());
                         if !self.sub.is_empty() {
                             ui.label(RichText::new(self.sub).color(MUTED).size(12.0));
                         }
@@ -823,7 +851,7 @@ impl<T: Copy + PartialEq> Shell<'_, T> {
                     vec2(page_ui.available_width(), 34.0),
                     Layout::left_to_right(Align::Center),
                     |ui| {
-                        ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
+                        ui.label(RichText::new(title).size(20.0).semi().color(TEXT));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui
                                 .add(Button::new(Icon::Close))

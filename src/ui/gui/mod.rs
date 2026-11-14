@@ -489,7 +489,7 @@ fn welcome(ui: &mut egui::Ui, name: &mut String) -> bool {
                     brand_mark(ui, 58.0);
                     ui.add_space(14.0);
                     eyebrow(ui, "BIENVENUE DANS TON ESPACE");
-                    ui.label(RichText::new("Ta bande.\nTa voix.").size(30.0).strong().color(TEXT));
+                    ui.label(RichText::new("Ta bande.\nTa voix.").size(30.0).semi().color(TEXT));
                     ui.add_space(6.0);
                     ui.label(RichText::new("Des salons privés, hébergés par vos PC. Sans compte.").color(MUTED));
                 });
@@ -548,20 +548,27 @@ impl App {
         egui::Panel::top("home_top")
             .frame(
                 egui::Frame::new()
-                    .fill(PANEL)
-                    .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.55)))
-                    .inner_margin(Margin::symmetric(22, 11)),
+                    .fill(BG)
+                    .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.6)))
+                    .inner_margin(Margin::symmetric(22, 12)),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    brand_mark(ui, 28.0);
+                    brand_mark(ui, 30.0);
                     ui.add_space(2.0);
                     ui.vertical(|ui| {
-                        ui.label(RichText::new("RIP Discord").size(18.0).strong().color(TEXT));
+                        ui.spacing_mut().item_spacing.y = 0.0;
                         ui.label(
-                            RichText::new(format!("LOCAL • PRIVÉ • P2P • v{VERSION}"))
+                            RichText::new("RIP Discord")
+                                .size(16.0)
+                                .semi()
+                                .color(TEXT)
+                                .extra_letter_spacing(-0.2),
+                        );
+                        ui.label(
+                            RichText::new(format!("Local · privé · pair à pair · v{VERSION}"))
                                 .color(MUTED)
-                                .small(),
+                                .size(11.5),
                         );
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -621,62 +628,90 @@ impl App {
     }
 
     fn home_body(&mut self, ui: &mut egui::Ui, action: &mut Option<Target>) {
-        egui::Frame::new()
-            .fill(SURFACE)
-            .stroke(Stroke::new(1.0, ACCENT.gamma_multiply(0.34)))
-            .corner_radius(22)
-            .inner_margin(26)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("Parle comme chez toi.").size(30.0).strong().color(TEXT));
-                        ui.add_space(5.0);
-                        ui.label(
-                            RichText::new("Crée un repaire pour ta bande ou rejoins celui d’un ami.").color(MUTED),
-                        );
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        brand_mark(ui, 70.0);
-                    });
+        let hero = egui::Frame::new()
+            .stroke(Stroke::new(1.0, BORDER))
+            .corner_radius(20)
+            .inner_margin(28);
+        let bg = ui.painter().add(egui::Shape::Noop);
+        let glow_slot = ui.painter().add(egui::Shape::Noop);
+        let r = hero.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    eyebrow(ui, "TES SERVEURS, TES RÈGLES");
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new("Parle comme chez toi.")
+                            .size(30.0)
+                            .semi()
+                            .color(TEXT)
+                            .extra_letter_spacing(-0.6),
+                    );
+                    ui.add_space(3.0);
+                    ui.label(RichText::new("Crée un repaire pour ta bande ou rejoins celui d’un ami.").color(MUTED));
                 });
-                ui.add_space(24.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(
-                            Button::new(Icon::Plus)
-                                .label("Créer un serveur")
-                                .kind(Look::Primary)
-                                .height(44.0)
-                                .width(220.0),
-                        )
-                        .clicked()
-                    {
-                        self.dialog = Some(Dialog::Create {
-                            name: String::new(),
-                            keep_history: true,
-                        });
-                    }
-                    if ui
-                        .add(
-                            Button::new(Icon::ArrowRight)
-                                .label("Rejoindre avec un code")
-                                .height(44.0)
-                                .width(230.0),
-                        )
-                        .clicked()
-                    {
-                        self.dialog = Some(Dialog::Join {
-                            code: String::new(),
-                            show: false,
-                        });
-                    }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    brand_mark(ui, 72.0);
                 });
             });
+            ui.add_space(26.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add(
+                        Button::new(Icon::Plus)
+                            .label("Créer un serveur")
+                            .kind(Look::Primary)
+                            .height(44.0)
+                            .width(220.0),
+                    )
+                    .clicked()
+                {
+                    self.dialog = Some(Dialog::Create {
+                        name: String::new(),
+                        keep_history: true,
+                    });
+                }
+                if ui
+                    .add(
+                        Button::new(Icon::ArrowRight)
+                            .label("Rejoindre avec un code")
+                            .height(44.0)
+                            .width(230.0),
+                    )
+                    .clicked()
+                {
+                    self.dialog = Some(Dialog::Join {
+                        code: String::new(),
+                        show: false,
+                    });
+                }
+            });
+        });
+        // Fond de la carte, puis une lueur d'accent derrière la marque.
+        let rect = r.response.rect;
+        let p = ui.painter();
+        p.set(
+            bg,
+            egui::Shape::Vec(vec![
+                shadow(22).as_shape(rect, 20).into(),
+                egui::Shape::rect_filled(rect, 20, CARD),
+            ]),
+        );
+        let mut glow = Vec::new();
+        let center = egui::pos2(rect.right() - 64.0, rect.top() + rect.height() * 0.4);
+        soft_glow_into(&mut glow, center, rect.height() * 1.1, ACCENT.gamma_multiply(0.22));
+        p.with_clip_rect(rect.shrink(2.0))
+            .set(glow_slot, egui::Shape::Vec(glow));
         ui.add_space(30.0);
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Mes serveurs").size(21.0).strong().color(TEXT));
+            ui.label(
+                RichText::new("Mes serveurs")
+                    .size(17.0)
+                    .semi()
+                    .color(TEXT)
+                    .extra_letter_spacing(-0.2),
+            );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
                     RichText::new(format!(
@@ -730,9 +765,9 @@ impl App {
 
         if self.servers.is_empty() {
             egui::Frame::new()
-                .fill(CARD.gamma_multiply(0.78))
-                .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.75)))
-                .corner_radius(18)
+                .fill(CARD.gamma_multiply(0.6))
+                .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.8)))
+                .corner_radius(16)
                 .inner_margin(30)
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
@@ -742,7 +777,7 @@ impl App {
                         ui.label(
                             RichText::new("Ton premier salon t’attend.")
                                 .size(18.0)
-                                .strong()
+                                .semi()
                                 .color(TEXT),
                         );
                         ui.add_space(4.0);
@@ -760,16 +795,17 @@ impl App {
         for c in &self.servers {
             egui::Frame::new()
                 .fill(CARD)
-                .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.9)))
-                .corner_radius(18)
+                .stroke(Stroke::new(1.0, BORDER))
+                .corner_radius(16)
                 .inner_margin(16)
+                .shadow(shadow(10))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         avatar(ui, c.name(), 48.0);
                         ui.add_space(5.0);
                         ui.vertical(|ui| {
-                            ui.label(RichText::new(c.name()).size(17.0).strong().color(TEXT));
+                            ui.label(RichText::new(c.name()).size(16.0).semi().color(TEXT));
                             let role = match c.role(&me) {
                                 Role::Owner => "créateur",
                                 Role::Admin => "admin",
@@ -857,6 +893,7 @@ impl App {
         let mut close = false;
         let mut error = None;
         let r = egui::Modal::new(egui::Id::unique("dialog"))
+            .backdrop_color(BACKDROP)
             .frame(card().inner_margin(26))
             .show(ctx, |ui| {
                 ui.set_width(400.0);
@@ -877,7 +914,7 @@ impl App {
                     ui.painter().rect_filled(rect, 12, ACCENT.gamma_multiply(0.22));
                     icons::paint(ui.painter(), rect.shrink(10.0), glyph, ACCENT_HOVER);
                     ui.add_space(4.0);
-                    ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
+                    ui.label(RichText::new(title).size(20.0).semi().color(TEXT));
                     at_right(ui, |ui| {
                         if ui
                             .add(Button::new(Icon::Close))
@@ -1562,7 +1599,7 @@ impl Session {
             .frame(
                 egui::Frame::new()
                     .fill(PANEL)
-                    .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.7))),
+                    .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.8))),
             )
             .show(ui, |ui| self.sidebar(ui, threshold));
 
@@ -1571,9 +1608,9 @@ impl Session {
             egui::Panel::top("top")
                 .frame(
                     egui::Frame::new()
-                        .fill(CARD.gamma_multiply(0.92))
-                        .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.48)))
-                        .inner_margin(Margin::symmetric(22, 11)),
+                        .fill(BG)
+                        .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.7)))
+                        .inner_margin(Margin::symmetric(20, 10)),
                 )
                 .show(ui, |ui| self.top_bar(ui, wide));
         }
@@ -1585,20 +1622,20 @@ impl Session {
                 .frame(
                     egui::Frame::new()
                         .fill(PANEL)
-                        .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.7)))
-                        .inner_margin(Margin::symmetric(16, 18)),
+                        .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.8)))
+                        .inner_margin(Margin::symmetric(14, 18)),
                 )
                 .show(ui, |ui| self.members(ui));
         }
 
         if self.view.is_some() {
             egui::Panel::bottom("input")
-                .frame(
-                    egui::Frame::new()
-                        .fill(CARD.gamma_multiply(0.9))
-                        .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.48)))
-                        .inner_margin(Margin::symmetric(22, 14)),
-                )
+                .frame(egui::Frame::new().fill(BG).inner_margin(Margin {
+                    left: 20,
+                    right: 20,
+                    top: 6,
+                    bottom: 16,
+                }))
                 .show(ui, |ui| self.input_bar(ui));
         }
 
@@ -1662,13 +1699,13 @@ impl Session {
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("EN DIRECT").color(DANGER).small().strong());
+                        ui.label(RichText::new("EN DIRECT").color(DANGER).small().semi());
                         let title = if mine {
                             "Ton écran (aperçu)".to_string()
                         } else {
                             format!("Écran de {}", view.peer_name(who))
                         };
-                        ui.label(RichText::new(title).strong().color(TEXT));
+                        ui.label(RichText::new(title).semi().color(TEXT));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             close = ui
                                 .button(if mine { "Cacher" } else { "Fermer" })
@@ -1905,7 +1942,7 @@ impl Session {
             } else {
                 format!("Webcam de {name}")
             };
-            ui.label(RichText::new(title).strong().color(TEXT));
+            ui.label(RichText::new(title).semi().color(TEXT));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui
                     .button("Quitter le plein écran")
@@ -1978,8 +2015,8 @@ impl Session {
         egui::Panel::top("side_head")
             .frame(
                 egui::Frame::new()
-                    .fill(CARD.gamma_multiply(0.72))
-                    .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.38)))
+                    .fill(PANEL)
+                    .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.7)))
                     .inner_margin(Margin::symmetric(16, 14)),
             )
             .show(ui, |ui| {
@@ -1988,8 +2025,17 @@ impl Session {
                     .as_ref()
                     .map_or_else(|| self.title.clone(), |v| v.card.name().to_string());
                 ui.horizontal(|ui| {
-                    avatar(ui, &title, 30.0);
-                    ui.add(egui::Label::new(RichText::new(title).size(16.0).strong().color(TEXT)).truncate());
+                    avatar(ui, &title, 32.0);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(title)
+                                .size(15.5)
+                                .semi()
+                                .color(TEXT)
+                                .extra_letter_spacing(-0.1),
+                        )
+                        .truncate(),
+                    );
                     if self.view.is_some() {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if ui
@@ -2059,8 +2105,8 @@ impl Session {
         egui::Panel::bottom("side_me")
             .frame(
                 egui::Frame::new()
-                    .fill(BG.lerp_to_gamma(PANEL, 0.35))
-                    .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.38)))
+                    .fill(BG.lerp_to_gamma(PANEL, 0.5))
+                    .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.7)))
                     .inner_margin(Margin::symmetric(12, 12)),
             )
             .show(ui, |ui| {
@@ -2176,7 +2222,7 @@ impl Session {
                                 watch = Some((!watching).then_some(*m));
                             }
                         } else {
-                            ui.label(RichText::new("EN DIRECT").color(DANGER).small().strong())
+                            ui.label(RichText::new("EN DIRECT").color(DANGER).small().semi())
                                 .on_hover_text("Partage son écran");
                         }
                     }
@@ -2231,7 +2277,7 @@ impl Session {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 5.0;
                     icon(ui, Icon::Waves, 15.0, OK);
-                    ui.label(RichText::new("Vocal connecté").color(OK).strong().size(13.5));
+                    ui.label(RichText::new("Vocal connecté").color(OK).semi().size(13.5));
                 });
                 ui.add(egui::Label::new(RichText::new(&name).color(MUTED).small()).truncate());
             });
@@ -2358,8 +2404,9 @@ impl Session {
                 }
             });
         }
-        ui.add_space(6.0);
-        ui.separator();
+        ui.add_space(8.0);
+        icons::divider(ui);
+        ui.add_space(2.0);
     }
 
     /// Moi : pseudo, micro, son, réglages. Utilisable aussi hors d'un salon.
@@ -2369,12 +2416,24 @@ impl Session {
             .as_ref()
             .map_or_else(|| self.name.clone(), |v| v.peer_name(v.my_peer));
         ui.horizontal(|ui| {
-            let rect = avatar(ui, &name, 32.0);
+            let rect = avatar(ui, &name, 34.0);
+            presence_dot(
+                ui,
+                rect,
+                if self.muted || self.deafened {
+                    DANGER
+                } else if self.view.is_some() {
+                    OK
+                } else {
+                    WARN
+                },
+            );
             if self.audio.as_ref().is_some_and(|a| a.me_speaking()) {
                 speaking_ring(ui, rect);
             }
             ui.vertical(|ui| {
-                ui.add(egui::Label::new(RichText::new(&name).color(TEXT).strong()).truncate());
+                ui.spacing_mut().item_spacing.y = 1.0;
+                ui.add(egui::Label::new(RichText::new(&name).color(TEXT).semi().size(14.0)).truncate());
                 let state = if self.deafened {
                     "son coupé"
                 } else if self.muted {
@@ -2445,9 +2504,9 @@ impl Session {
         let row = vec2(ui.available_width(), 38.0);
         ui.allocate_ui_with_layout(row, Layout::left_to_right(Align::Center), |ui| {
             icon(ui, Icon::Hash, 20.0, MUTED);
-            ui.label(RichText::new(&channel).size(17.0).strong().color(TEXT));
+            ui.label(RichText::new(&channel).size(16.5).semi().color(TEXT));
             if !keep {
-                ui.label(RichText::new("éphémère").color(WARN).small().strong())
+                ui.label(RichText::new("éphémère").color(WARN).small().semi())
                     .on_hover_text("Rien n'est gardé : les messages disparaissent à la fermeture.");
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -2550,12 +2609,13 @@ impl Session {
         let mut cmds = Vec::new();
         let mut banned = false;
         egui::ScrollArea::vertical().id_salt("members").show(ui, |ui| {
-            eyebrow(ui, &format!("EN LIGNE — {}", view.peers.len()));
+            ui.label(caps(&format!("En ligne — {}", view.peers.len())));
             ui.add_space(6.0);
             let in_voice: Vec<PeerId> = view.voice.values().flat_map(|r| r.members.clone()).collect();
             for (id, p) in &view.peers {
                 hover_row(ui, |ui| {
-                    let rect = avatar(ui, &p.name, 30.0);
+                    let rect = avatar(ui, &p.name, 32.0);
+                    presence_dot(ui, rect, OK);
                     let speaking = self.audio.as_ref().is_some_and(|a| {
                         if *id == view.my_peer {
                             a.me_speaking()
@@ -2567,10 +2627,8 @@ impl Session {
                         speaking_ring(ui, rect);
                     }
                     ui.vertical(|ui| {
-                        let mut name = RichText::new(view.display_name(&p.user, &p.name)).color(TEXT);
-                        if *id == view.my_peer {
-                            name = name.strong();
-                        }
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        let name = RichText::new(view.display_name(&p.user, &p.name)).color(TEXT).medium();
                         ui.add(egui::Label::new(name).truncate());
                         let mut tags = Vec::new();
                         if view.host_user == Some(p.user) {
@@ -2735,7 +2793,7 @@ impl Session {
                         } else {
                             format!("{name} demande à devenir l'hôte du serveur.")
                         };
-                        ui.label(RichText::new(text).strong().color(TEXT));
+                        ui.label(RichText::new(text).semi().color(TEXT));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.label(RichText::new(format!("{left:.0} s")).color(MUTED).small());
                             if !voted {
@@ -2783,7 +2841,7 @@ impl Session {
                     ui.label(
                         RichText::new(format!("Bienvenue dans #{channel_name}"))
                             .size(24.0)
-                            .strong()
+                            .semi()
                             .color(TEXT),
                     );
                     ui.label(RichText::new("C'est le début de ce salon.").color(MUTED));
@@ -2879,7 +2937,7 @@ fn channel_heading(ui: &mut egui::Ui, title: &str, can_edit: bool) -> bool {
         Layout::left_to_right(Align::Center),
         |ui| {
             ui.add_space(8.0);
-            ui.label(RichText::new(title).color(MUTED).size(11.5).strong());
+            ui.label(caps(title));
             if can_edit {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     manage = ui

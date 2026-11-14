@@ -76,6 +76,7 @@ impl Picker {
             .collect();
         let mut refresh = false;
         let r = egui::Modal::new(egui::Id::unique("partage"))
+            .backdrop_color(BACKDROP)
             .frame(card().inner_margin(24))
             .show(ctx, |ui| {
                 ui.set_width(624.0);
@@ -89,7 +90,7 @@ impl Picker {
                     ui.painter().rect_filled(rect, 12, ACCENT.gamma_multiply(0.22));
                     paint(ui.painter(), rect.shrink(10.0), Icon::Screen, ACCENT_HOVER);
                     ui.add_space(4.0);
-                    ui.label(RichText::new(title).size(20.0).strong().color(TEXT));
+                    ui.label(RichText::new(title).size(20.0).semi().color(TEXT));
                     at_right(ui, |ui| {
                         if ui.add(Button::new(Icon::Close)).on_hover_text("Fermer (Échap)").clicked() {
                             out = Outcome::Closed;

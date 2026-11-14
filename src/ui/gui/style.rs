@@ -6,45 +6,133 @@ use eframe::egui::{
 
 use crate::audio;
 
-/// La palette est volontairement courte : elle garde l'app lisible dans une
-/// pièce sombre et évite textures, images ou animations pour "faire joli".
-pub const BG: Color32 = Color32::from_rgb(0x09, 0x0b, 0x12);
-pub const PANEL: Color32 = Color32::from_rgb(0x10, 0x13, 0x1d);
-pub const CARD: Color32 = Color32::from_rgb(0x17, 0x1b, 0x28);
-pub const SURFACE: Color32 = Color32::from_rgb(0x1c, 0x21, 0x30);
-pub const FIELD: Color32 = Color32::from_rgb(0x0d, 0x10, 0x18);
-pub const BORDER: Color32 = Color32::from_rgb(0x2a, 0x31, 0x44);
-pub const ACCENT: Color32 = Color32::from_rgb(0x8b, 0x6c, 0xff);
-pub const ACCENT_HOVER: Color32 = Color32::from_rgb(0xa3, 0x8a, 0xff);
+/// Palette sobre : gris neutres à peine bleutés, une seule couleur d'accent.
+/// Les surfaces montent d'un cran à chaque niveau (fond, panneaux, cartes),
+/// les bordures sont des filets fins plutôt que des cadres.
+pub const BG: Color32 = Color32::from_rgb(0x0d, 0x0e, 0x12);
+pub const PANEL: Color32 = Color32::from_rgb(0x12, 0x13, 0x18);
+pub const CARD: Color32 = Color32::from_rgb(0x17, 0x18, 0x1f);
+pub const SURFACE: Color32 = Color32::from_rgb(0x1d, 0x1e, 0x26);
+pub const FIELD: Color32 = Color32::from_rgb(0x0b, 0x0c, 0x10);
+pub const BORDER: Color32 = Color32::from_rgb(0x27, 0x29, 0x33);
+pub const ACCENT: Color32 = Color32::from_rgb(0x76, 0x63, 0xf6);
+pub const ACCENT_HOVER: Color32 = Color32::from_rgb(0x95, 0x86, 0xff);
 /// Fond d'un élément survolé, puis enfoncé.
-pub const HOVER: Color32 = Color32::from_rgb(0x26, 0x2d, 0x41);
-pub const PRESSED: Color32 = Color32::from_rgb(0x30, 0x38, 0x50);
-pub const TEXT: Color32 = Color32::from_rgb(0xf2, 0xf4, 0xfb);
-pub const MUTED: Color32 = Color32::from_rgb(0x99, 0xa2, 0xb5);
-pub const OK: Color32 = Color32::from_rgb(0x4e, 0xdf, 0xa7);
-pub const WARN: Color32 = Color32::from_rgb(0xff, 0xbd, 0x59);
-pub const DANGER: Color32 = Color32::from_rgb(0xff, 0x70, 0x86);
+pub const HOVER: Color32 = Color32::from_rgb(0x22, 0x24, 0x2d);
+pub const PRESSED: Color32 = Color32::from_rgb(0x2b, 0x2d, 0x38);
+pub const TEXT: Color32 = Color32::from_rgb(0xec, 0xed, 0xf2);
+pub const MUTED: Color32 = Color32::from_rgb(0x8d, 0x92, 0x9f);
+pub const OK: Color32 = Color32::from_rgb(0x3e, 0xd5, 0x98);
+pub const WARN: Color32 = Color32::from_rgb(0xf4, 0xb7, 0x50);
+pub const DANGER: Color32 = Color32::from_rgb(0xf2, 0x60, 0x76);
+
+/// Voile derrière une fenêtre modale.
+pub const BACKDROP: Color32 = Color32::from_rgba_premultiplied(4, 4, 8, 170);
 
 pub const AVATARS: [Color32; 6] = [
-    Color32::from_rgb(0x7c, 0x5c, 0xff),
-    Color32::from_rgb(0x3d, 0xa5, 0xdc),
-    Color32::from_rgb(0x3d, 0xdc, 0x97),
-    Color32::from_rgb(0xf5, 0xb1, 0x4c),
-    Color32::from_rgb(0xff, 0x6b, 0x9a),
-    Color32::from_rgb(0x4c, 0xd4, 0xf5),
+    Color32::from_rgb(0x76, 0x63, 0xf6),
+    Color32::from_rgb(0x3b, 0x9b, 0xe0),
+    Color32::from_rgb(0x2f, 0xb8, 0x8a),
+    Color32::from_rgb(0xe0, 0x9a, 0x3e),
+    Color32::from_rgb(0xe0, 0x5b, 0x8c),
+    Color32::from_rgb(0x2d, 0xb3, 0xc9),
 ];
 
+/// Graisses de la police (Inter, sous-ensemble latin embarqué : ~70 ko
+/// chacune). La police par défaut d'egui n'a ni gras ni demi-gras.
+pub const MEDIUM: &str = "medium";
+pub const SEMIBOLD: &str = "semibold";
+
+pub fn medium(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(MEDIUM.into()))
+}
+
+pub fn semibold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(SEMIBOLD.into()))
+}
+
+/// `.semi()` / `.medium()` sur un texte : change la graisse sans toucher à
+/// la taille.
+pub trait Weight {
+    fn semi(self) -> Self;
+    fn medium(self) -> Self;
+}
+
+impl Weight for RichText {
+    fn semi(self) -> Self {
+        self.family(FontFamily::Name(SEMIBOLD.into())).strong()
+    }
+    fn medium(self) -> Self {
+        self.family(FontFamily::Name(MEDIUM.into()))
+    }
+}
+
+fn install_fonts(ctx: &egui::Context) {
+    use egui::{FontData, FontDefinitions};
+    use std::sync::Arc;
+    let mut fonts = FontDefinitions::default();
+    let faces: [(&str, &'static [u8]); 3] = [
+        ("inter", include_bytes!("../../../assets/fonts/Inter-Regular.otf")),
+        ("inter-medium", include_bytes!("../../../assets/fonts/Inter-Medium.otf")),
+        (
+            "inter-semibold",
+            include_bytes!("../../../assets/fonts/Inter-SemiBold.otf"),
+        ),
+    ];
+    for (name, bytes) in faces {
+        fonts
+            .font_data
+            .insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
+    }
+    // Les polices d'egui restent derrière : emojis et symboles absents d'Inter.
+    let fallback = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    let family = |first: &str| {
+        std::iter::once(first.to_owned())
+            .chain(fallback.iter().cloned())
+            .collect::<Vec<_>>()
+    };
+    fonts.families.insert(FontFamily::Proportional, family("inter"));
+    fonts
+        .families
+        .insert(FontFamily::Name(MEDIUM.into()), family("inter-medium"));
+    fonts
+        .families
+        .insert(FontFamily::Name(SEMIBOLD.into()), family("inter-semibold"));
+    ctx.set_fonts(fonts);
+}
+
+/// Ombre portée douce des cartes et fenêtres.
+pub fn shadow(depth: u8) -> egui::epaint::Shadow {
+    egui::epaint::Shadow {
+        offset: [0, depth as i8 / 2],
+        blur: depth.saturating_mul(2),
+        spread: 0,
+        color: Color32::from_black_alpha(90 + depth.min(40) * 2),
+    }
+}
+
 pub fn apply_theme(ctx: &egui::Context) {
+    install_fonts(ctx);
     let mut v = egui::Visuals::dark();
     v.panel_fill = BG;
     v.window_fill = CARD;
+    v.window_stroke = Stroke::new(1.0, BORDER);
+    v.window_corner_radius = CornerRadius::same(14);
+    v.window_shadow = shadow(24);
+    v.popup_shadow = shadow(16);
+    v.menu_corner_radius = CornerRadius::same(10);
     v.extreme_bg_color = FIELD;
     v.text_edit_bg_color = Some(FIELD);
     v.override_text_color = Some(TEXT);
-    v.selection.bg_fill = ACCENT.gamma_multiply(0.6);
+    v.selection.bg_fill = ACCENT.gamma_multiply(0.55);
     v.selection.stroke = Stroke::new(1.0, ACCENT);
     v.hyperlink_color = ACCENT_HOVER;
-    let r = CornerRadius::same(12);
+    v.faint_bg_color = SURFACE;
+    let r = CornerRadius::same(10);
     for w in [
         &mut v.widgets.noninteractive,
         &mut v.widgets.inactive,
@@ -55,31 +143,38 @@ pub fn apply_theme(ctx: &egui::Context) {
         w.corner_radius = r;
     }
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER.gamma_multiply(0.8));
+    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
     v.widgets.inactive.weak_bg_fill = SURFACE;
     // Rail des curseurs, fond des cases à cocher : visibles sur les cartes.
     v.widgets.inactive.bg_fill = FIELD;
     v.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
-    // Survol bien visible : fond plus clair, liseré violet, main du lien.
+    // Survol visible mais calme : fond plus clair, liseré d'accent discret.
     v.widgets.hovered.weak_bg_fill = HOVER;
     v.widgets.hovered.bg_fill = HOVER;
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT.gamma_multiply(0.72));
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT.gamma_multiply(0.55));
     v.widgets.active.weak_bg_fill = PRESSED;
     v.widgets.active.bg_fill = PRESSED;
     v.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
+    v.widgets.open.weak_bg_fill = PRESSED;
     v.interact_cursor = Some(egui::CursorIcon::PointingHand);
     ctx.set_visuals(v);
 
     ctx.global_style_mut(|s| {
         s.spacing.item_spacing = vec2(9.0, 9.0);
-        s.spacing.button_padding = vec2(14.0, 10.0);
+        s.spacing.button_padding = vec2(14.0, 9.0);
+        s.spacing.menu_margin = Margin::same(6);
+        s.spacing.scroll.bar_width = 6.0;
+        s.spacing.scroll.floating_allocated_width = 0.0;
         s.text_styles
-            .insert(TextStyle::Body, FontId::new(15.0, FontFamily::Proportional));
+            .insert(TextStyle::Heading, FontId::new(20.0, FontFamily::Name(SEMIBOLD.into())));
         s.text_styles
-            .insert(TextStyle::Button, FontId::new(15.0, FontFamily::Proportional));
+            .insert(TextStyle::Body, FontId::new(14.5, FontFamily::Proportional));
         s.text_styles
-            .insert(TextStyle::Small, FontId::new(12.5, FontFamily::Proportional));
+            .insert(TextStyle::Button, FontId::new(14.5, FontFamily::Name(MEDIUM.into())));
         s.text_styles
-            .insert(TextStyle::Monospace, FontId::new(15.0, FontFamily::Monospace));
+            .insert(TextStyle::Small, FontId::new(12.0, FontFamily::Proportional));
+        s.text_styles
+            .insert(TextStyle::Monospace, FontId::new(14.0, FontFamily::Monospace));
     });
 }
 
@@ -147,8 +242,13 @@ impl egui::Widget for Tinted<'_> {
     }
 }
 
+/// Assombrit une couleur.
+pub fn darken(c: Color32, t: f32) -> Color32 {
+    c.lerp_to_gamma(Color32::from_black_alpha(c.a()), t)
+}
+
 /// Éclaircit une couleur (transparente : voile blanc léger).
-fn lighten(c: Color32, t: f32) -> Color32 {
+pub fn lighten(c: Color32, t: f32) -> Color32 {
     if c.a() == 0 {
         return Color32::from_white_alpha((t * 90.0) as u8);
     }
@@ -156,12 +256,12 @@ fn lighten(c: Color32, t: f32) -> Color32 {
 }
 
 pub fn primary_button(label: &str, width: f32) -> Tinted<'_> {
-    let button = egui::Button::new(RichText::new(label).strong().color(Color32::WHITE)).min_size(vec2(width, 44.0));
+    let button = egui::Button::new(RichText::new(label).semi().color(Color32::WHITE)).min_size(vec2(width, 44.0));
     Tinted::new(button, ACCENT, Stroke::new(1.0, ACCENT_HOVER.gamma_multiply(0.7))).hover(ACCENT_HOVER)
 }
 
 pub fn secondary_button(label: &str, width: f32) -> Tinted<'_> {
-    let button = egui::Button::new(RichText::new(label).strong().color(TEXT)).min_size(vec2(width, 44.0));
+    let button = egui::Button::new(RichText::new(label).semi().color(TEXT)).min_size(vec2(width, 44.0));
     Tinted::new(button, SURFACE, Stroke::new(1.0, BORDER))
         .hover(HOVER)
         .hover_stroke(Stroke::new(1.0, ACCENT.gamma_multiply(0.72)))
@@ -169,12 +269,21 @@ pub fn secondary_button(label: &str, width: f32) -> Tinted<'_> {
 
 pub fn field_label(ui: &mut egui::Ui, text: &str) {
     ui.with_layout(Layout::top_down(Align::Min), |ui| {
-        ui.label(RichText::new(text).color(MUTED).small().strong());
+        ui.label(RichText::new(text).color(MUTED).size(12.5).medium());
     });
 }
 
+/// Petit titre en capitales espacées, au-dessus d'une liste ou d'un groupe.
+pub fn caps(text: &str) -> RichText {
+    RichText::new(text.to_uppercase())
+        .color(MUTED.gamma_multiply(0.9))
+        .size(11.0)
+        .extra_letter_spacing(0.8)
+        .semi()
+}
+
 pub fn section_title(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).color(MUTED).small().strong());
+    ui.label(caps(text));
     ui.add_space(4.0);
 }
 
@@ -192,26 +301,81 @@ pub fn color_for(name: &str) -> Color32 {
 
 pub fn avatar(ui: &mut egui::Ui, name: &str, size: f32) -> egui::Rect {
     let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
-    let p = ui.painter();
-    p.circle_filled(rect.center(), size / 2.0, color_for(name));
-    p.circle_stroke(
-        rect.center(),
-        size / 2.0 - 0.5,
-        Stroke::new(1.0, Color32::WHITE.gamma_multiply(0.16)),
-    );
+    paint_avatar(ui.painter(), rect.center(), size, name);
+    rect
+}
+
+/// Pastille ronde d'une personne ou d'un serveur : dégradé léger et initiale.
+pub fn paint_avatar(p: &egui::Painter, c: egui::Pos2, size: f32, name: &str) {
+    let color = color_for(name);
+    gradient_disc(p, c, size / 2.0, lighten(color, 0.16), darken(color, 0.18));
+    p.circle_stroke(c, size / 2.0 - 0.5, Stroke::new(1.0, Color32::from_white_alpha(28)));
     let initial = name
         .chars()
         .next()
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_default();
     p.text(
-        rect.center(),
+        c + vec2(0.0, size * 0.01),
         Align2::CENTER_CENTER,
         initial,
-        FontId::proportional(size * 0.45),
+        semibold((size * 0.42).round()),
         Color32::WHITE,
     );
-    rect
+}
+
+/// Disque en dégradé vertical (haut plus clair) : quelques triangles, sans
+/// image.
+pub fn gradient_disc(p: &egui::Painter, c: egui::Pos2, r: f32, top: Color32, bottom: Color32) {
+    let n = ((r * 1.6) as usize).clamp(24, 96);
+    let mut mesh = egui::Mesh::default();
+    let at = |y: f32| top.lerp_to_gamma(bottom, ((y - (c.y - r)) / (2.0 * r)).clamp(0.0, 1.0));
+    mesh.colored_vertex(c, at(c.y));
+    for i in 0..n {
+        let a = i as f32 / n as f32 * std::f32::consts::TAU;
+        let v = c + r * vec2(a.cos(), a.sin());
+        mesh.colored_vertex(v, at(v.y));
+        mesh.add_triangle(0, 1 + i as u32, 1 + ((i + 1) % n) as u32);
+    }
+    p.add(egui::Shape::mesh(mesh));
+}
+
+/// Lueur radiale qui s'estompe jusqu'au transparent (halo d'ambiance).
+pub fn soft_glow(p: &egui::Painter, c: egui::Pos2, r: f32, color: Color32) {
+    let mut shapes = Vec::new();
+    soft_glow_into(&mut shapes, c, r, color);
+    p.extend(shapes);
+}
+
+/// Pareil, ajouté à une liste de formes (à peindre plus tard).
+pub fn soft_glow_into(out: &mut Vec<egui::Shape>, c: egui::Pos2, r: f32, color: Color32) {
+    const RINGS: [f32; 6] = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
+    let n = 64;
+    let mut mesh = egui::Mesh::default();
+    for (k, t) in RINGS.iter().enumerate() {
+        // Décroissance douce (sans bord visible).
+        let a = (1.0 - t) * (1.0 - t) * (1.0 - t * 0.5);
+        for i in 0..n {
+            let ang = i as f32 / n as f32 * std::f32::consts::TAU;
+            mesh.colored_vertex(c + r * t * vec2(ang.cos(), ang.sin()), color.gamma_multiply(a));
+            if k > 0 {
+                let (i0, i1) = (i as u32, ((i + 1) % n) as u32);
+                let (inner, outer) = (((k - 1) * n) as u32, (k * n) as u32);
+                mesh.add_triangle(inner + i0, outer + i0, outer + i1);
+                mesh.add_triangle(inner + i0, outer + i1, inner + i1);
+            }
+        }
+    }
+    out.push(egui::Shape::mesh(mesh));
+}
+
+/// Pastille d'état en bas à droite d'un avatar, détourée du fond.
+pub fn presence_dot(ui: &egui::Ui, avatar: egui::Rect, color: Color32) {
+    let r = (avatar.width() * 0.16).max(4.0);
+    let c = avatar.right_bottom() - vec2(r * 0.75, r * 0.75);
+    let p = ui.painter();
+    p.circle_filled(c, r + 2.0, PANEL);
+    p.circle_filled(c, r, color);
 }
 
 /// Anneau vert autour d'un avatar : la personne parle.
@@ -244,30 +408,33 @@ pub fn tab(ui: &mut egui::Ui, selected: bool, label: &str) -> bool {
     ui.add(egui::Button::selectable(selected, text)).clicked()
 }
 
-/// Cadre arrondi d'une carte.
+/// Cadre arrondi d'une carte, posé sur une ombre douce.
 pub fn card() -> egui::Frame {
     egui::Frame::new()
         .fill(CARD)
-        .stroke(Stroke::new(1.0, BORDER.gamma_multiply(0.88)))
-        .corner_radius(18)
+        .stroke(Stroke::new(1.0, BORDER))
+        .corner_radius(16)
         .inner_margin(20)
+        .shadow(shadow(18))
 }
 
-/// Halo décoratif discret : trois cercles GPU, sans image ni animation.
-/// Il est peint sous le contenu et ne participe donc pas au coût de mise en
-/// page des listes ou du chat.
+/// Halo d'ambiance : deux lueurs radiales très diffuses, sans image ni
+/// animation. Peint sous le contenu, il ne coûte rien à la mise en page.
 pub fn ambient_background(ui: &egui::Ui) {
     let rect = ui.max_rect();
     let p = ui.painter();
-    p.circle_filled(
-        egui::pos2(rect.right() - rect.width() * 0.10, rect.top() + rect.height() * 0.08),
-        rect.width().min(rect.height()) * 0.34,
-        ACCENT.gamma_multiply(0.075),
+    let m = rect.width().max(rect.height());
+    soft_glow(
+        p,
+        egui::pos2(rect.center().x + rect.width() * 0.18, rect.top() - m * 0.12),
+        m * 0.62,
+        ACCENT.gamma_multiply(0.16),
     );
-    p.circle_filled(
-        egui::pos2(rect.left() + rect.width() * 0.02, rect.bottom() - rect.height() * 0.04),
-        rect.width().min(rect.height()) * 0.27,
-        OK.gamma_multiply(0.035),
+    soft_glow(
+        p,
+        egui::pos2(rect.left() - m * 0.05, rect.bottom() + m * 0.08),
+        m * 0.45,
+        Color32::from_rgb(0x2d, 0xb3, 0xc9).gamma_multiply(0.06),
     );
 }
 
@@ -277,23 +444,29 @@ pub fn brand_mark(ui: &mut egui::Ui, size: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
     let p = ui.painter();
     let c = rect.center();
-    p.circle_filled(c, size / 2.0, ACCENT);
-    p.circle_stroke(c, size / 2.0 - 0.75, Stroke::new(1.5, ACCENT_HOVER));
-    p.circle_filled(egui::pos2(c.x + size * 0.16, c.y - size * 0.16), size * 0.15, OK);
-    p.rect_filled(
-        egui::Rect::from_center_size(
-            egui::pos2(c.x - size * 0.06, c.y + size * 0.03),
-            vec2(size * 0.34, size * 0.22),
-        ),
-        size * 0.08,
-        Color32::WHITE,
+    gradient_disc(p, c, size / 2.0, ACCENT_HOVER, Color32::from_rgb(0x55, 0x40, 0xd8));
+    p.circle_stroke(c, size / 2.0 - 0.5, Stroke::new(1.0, Color32::from_white_alpha(40)));
+    // Bulle de dialogue et pastille « en ligne ».
+    let bubble = egui::Rect::from_center_size(
+        egui::pos2(c.x - size * 0.05, c.y + size * 0.04),
+        vec2(size * 0.38, size * 0.25),
     );
+    p.rect_filled(bubble, size * 0.09, Color32::WHITE);
+    let dot = egui::pos2(c.x + size * 0.17, c.y - size * 0.17);
+    p.circle_filled(dot, size * 0.13, Color32::from_rgb(0x55, 0x40, 0xd8));
+    p.circle_filled(dot, size * 0.1, OK);
     response
 }
 
-/// Eyebrow pour introduire une zone sans utiliser une bordure supplémentaire.
+/// Petit titre d'accent pour introduire une zone sans bordure de plus.
 pub fn eyebrow(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).color(ACCENT_HOVER).small().strong());
+    ui.label(
+        RichText::new(text)
+            .color(ACCENT_HOVER)
+            .size(11.0)
+            .extra_letter_spacing(1.0)
+            .semi(),
+    );
 }
 
 /// Texte muet qui revient à la ligne.
@@ -436,10 +609,11 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
     // Une fenêtre modale aussi : ouverte depuis « Mes réglages », elle passe
     // par-dessus au lieu de rester cachée derrière.
     let r = egui::Modal::new(egui::Id::unique("aide"))
+        .backdrop_color(BACKDROP)
         .frame(card().inner_margin(20))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Aide").size(18.0).strong().color(TEXT));
+                ui.label(RichText::new("Aide").size(18.0).semi().color(TEXT));
                 at_right(ui, |ui| {
                     let close = super::icons::Button::new(super::icons::Icon::Close);
                     if ui.add(close).on_hover_text("Fermer (Échap)").clicked() {
@@ -483,7 +657,7 @@ pub fn help_window(ctx: &egui::Context, open: &mut bool) {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         status_dot(ui, *color);
-                        ui.label(RichText::new(*title).strong().color(*color));
+                        ui.label(RichText::new(*title).semi().color(*color));
                     });
                     ui.add(egui::Label::new(RichText::new(*text).color(MUTED)).wrap());
                 }

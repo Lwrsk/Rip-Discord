@@ -1,6 +1,6 @@
 [package]
 name = "rip-discord"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "Chat vocal/texte local et privé, hôte dynamique (un seul binaire client/hôte)"
 license = "MIT OR Apache-2.0"
