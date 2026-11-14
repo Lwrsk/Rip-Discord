@@ -305,7 +305,7 @@ impl ServerWindow {
         group(ui, "Connexion", |ui| {
             ui.horizontal(|ui| {
                 status_dot(ui, color);
-                ui.label(RichText::new(title).color(color).strong());
+                ui.label(RichText::new(title).color(color).semi());
             });
             if let Some(d) = detail {
                 hint(ui, d);

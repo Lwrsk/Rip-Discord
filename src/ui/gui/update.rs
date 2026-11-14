@@ -171,7 +171,7 @@ impl Updater {
                             icon(ui, Icon::Refresh, 18.0, ACCENT_HOVER);
                             ui.label(
                                 RichText::new(format!("RIP Discord {} est sorti", release.version))
-                                    .strong()
+                                    .semi()
                                     .color(TEXT),
                             );
                         });

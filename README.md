@@ -191,3 +191,6 @@ installer/      NSIS script of the Windows installer
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at
 your option.
+
+The bundled [Inter](https://github.com/rsms/inter) font (a Latin subset in
+`assets/fonts/`) is under the [SIL Open Font License 1.1](assets/fonts/OFL.txt).

@@ -277,6 +277,9 @@ Une faille ? Merci de la signaler en privé (voir [SECURITY.md](SECURITY.md)).
 
 Au choix, [MIT](LICENSE-MIT) ou [Apache-2.0](LICENSE-APACHE).
 
+La police [Inter](https://github.com/rsms/inter) embarquée (sous-ensemble latin
+dans `assets/fonts/`) est sous [SIL Open Font License 1.1](assets/fonts/OFL.txt).
+
 ## Publier une version
 
 ```sh
